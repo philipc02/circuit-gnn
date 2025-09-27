@@ -10,8 +10,8 @@ PIN_ROLES = {
     "R" : ["1", "2"], # resistor
     "C" : ["1", "2"],   # capacitor
     "V" : ["pos", "neg"],   # voltage source
-    "M" : ["d", "g", "s"],  # mosfet
-    "Q" : ["c", "b", "e"],   # bipolar transistor
+    "M" : ["drain", "gate", "source"],  # mosfet
+    "Q" : ["collector", "base", "emitter"],   # bipolar transistor
     "D": ["anode", "cathode"] # diode
 }
 

@@ -3,6 +3,7 @@ import networkx as nx
 import pickle
 from PySpice.Spice.Parser import SpiceParser
 import matplotlib.pyplot as plt
+import numpy as np  #TODO: add to requirements.txt
 
 # expand as much as possible
 PIN_ROLES = {
@@ -14,7 +15,17 @@ PIN_ROLES = {
     "D": ["anode", "cathode"] # diode
 }
 
-def netlist_to_netgraph(file_path, use_pin_nodes=False):
+# define different types for node feature vector
+NODE_TYPES = ["component", "pin", "net"]
+
+COMPONENT_TYPES = ["R", "C", "V", "M", "Q", "D"]
+
+PIN_TYPES = ["1", "2", "pos", "neg",
+             "drain", "gate", "source",
+             "collector", "base", "emitter",
+             "anode", "cathode"]
+
+def netlist_to_netgraph(file_path, use_star_structure=False):
     parser = SpiceParser(path=file_path)
     circuit = parser.build_circuit()
 
@@ -42,42 +53,52 @@ def netlist_to_netgraph(file_path, use_pin_nodes=False):
         if comp_type == "D" and len(nets) == 3:
             nets = nets[:2]
 
-        if use_pin_nodes:
-            # insert explicit pin nodes
+        if use_star_structure:
+            # central component node
+            G.add_node(element, type="component", comp_type = comp_type, features=encode_node_features("component", comp_type=comp_type))
+
+            # insert explicit pin nodes and connect to component node
+            for i, net in enumerate(nets):
+                pin_node = f"{element}.{pins[i]}"
+                G.add_node(pin_node, type="pin", component=element, pin=pins[i], features=encode_node_features("pin", pin_type=pins[i]))
+                # edge from pin to component
+                G.add_edge(pin_node, element, kind="component_connection")
+                # edge from pin to net node
+                G.add_node(str(net), type="net", features=encode_node_features("net"))
+                G.add_edge(pin_node, str(net), kind="net_connection")
+                    
+        else:
+
+            # behaviour from net_as_nodes
             for i, net in enumerate(nets):
                 pin_node = f"{element}.{pins[i]}"
                 G.add_node(pin_node, type="pin", component=element, pin=pins[i])
                 G.add_node(str(net), type="net")
                 G.add_edge(pin_node, str(net), kind="net_connection")
 
-            # add virtual edge connecting all pins of the same component
             for i in range(len(pins)):
                 for j in range(i + 1, len(pins)):
                     G.add_edge(f"{element}.{pins[i]}", f"{element}.{pins[j]}",
-                               component=element, pins=(pins[i], pins[j]), kind="component")
-                    
-        else:
-
-            # add nets as graph nodes
-            for net in nets:
-                if not G.has_node(net):
-                    G.add_node(net, is_net=True)
-
-            # for each pair of nets add edge representing component
-            if len(nets) == 2:
-                G.add_edge(nets[0], nets[1],
-                        component=element,
-                        pins=(pins[0], pins[1]))
-            else:
-                # for components with multiple terminals (mosfet, bipolar transistor)
-                for i in range(len(nets)):
-                    for j in range(i+1, len(nets)):
-                        G.add_edge(nets[i], nets[j],
-                                component=element,
-                                pins=(pins[i], pins[j]))
+                                component=element, pins=(pins[i], pins[j]), kind="component")
 
     return G
 
+def encode_node_features(node_type, comp_type=None, pin_type=None):
+    # one hot encoding for node type
+    node_vec = np.zeros(len(NODE_TYPES))
+    node_vec[NODE_TYPES.index(node_type)] = 1
+
+    # one hot encoding for component type
+    comp_vec = np.zeros(len(COMPONENT_TYPES))
+    if node_type == "component" and comp_type in COMPONENT_TYPES:
+        comp_vec[COMPONENT_TYPES.index(comp_type)] = 1
+
+    # one hot encoding for pin type
+    pin_vec = np.zeros(len(PIN_TYPES))
+    if node_type == "pin" and pin_type in PIN_TYPES:
+        pin_vec[PIN_TYPES.index(pin_type)] = 1
+    # concatenate vectors together -> node feature vector will have length 21
+    return np.concatenate([node_vec, comp_vec, pin_vec])
 
 def process_folder(input_folder, output_folder):
     os.makedirs(output_folder, exist_ok=True)
@@ -86,16 +107,16 @@ def process_folder(input_folder, output_folder):
         if filename.endswith((".cir", ".sp", ".net")):
             path = os.path.join(input_folder, filename)
             print(f"Processing {filename}")
-            G = netlist_to_netgraph(path, use_pin_nodes=True)
+            G = netlist_to_netgraph(path, use_star_structure=True)
 
             # save graph in output folder
-            graph_filename = os.path.splitext(filename)[0] + "_nets.gpickle"
+            graph_filename = os.path.splitext(filename)[0] + "_star.gpickle"
             graph_path = os.path.join(output_folder, graph_filename)
             with open(graph_path, "wb") as f:
                 pickle.dump(G, f)
-            print(f"Saved net-based graph to {graph_path}")
+            print(f"Saved star graph to {graph_path}")
 
-            pos = nx.spring_layout(G, seed=42)
+            pos = nx.kamada_kawai_layout(G)            
             # draw graph
             nx.draw(G, pos=pos, with_labels=True, node_size=500)
             plt.show()
@@ -103,5 +124,5 @@ def process_folder(input_folder, output_folder):
 
 if __name__ == "__main__":
     input_folder = "../netlists"
-    output_folder = "../graphs_nets"
+    output_folder = "../graphs_star"
     process_folder(input_folder, output_folder)
