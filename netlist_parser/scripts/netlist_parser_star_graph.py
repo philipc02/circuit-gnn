@@ -3,7 +3,7 @@ import networkx as nx
 import pickle
 from PySpice.Spice.Parser import SpiceParser
 import matplotlib.pyplot as plt
-import numpy as np  #TODO: add to requirements.txt
+import numpy as np  
 
 # expand as much as possible
 PIN_ROLES = {
@@ -70,6 +70,7 @@ def netlist_to_netgraph(file_path, use_star_structure=False):
         else:
 
             # behaviour from net_as_nodes
+            # no features
             for i, net in enumerate(nets):
                 pin_node = f"{element}.{pins[i]}"
                 G.add_node(pin_node, type="pin", component=element, pin=pins[i])
