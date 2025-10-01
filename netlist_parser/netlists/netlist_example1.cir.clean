@@ -1,0 +1,4 @@
+NETLIST 1
+V1 n1 0 5
+R1 n2 n1 1k
+C1 n2 0 1µ

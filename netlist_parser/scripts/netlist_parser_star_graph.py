@@ -11,29 +11,72 @@ PIN_ROLES = {
     "C" : ["1", "2"],   # capacitor
     "L" : ["1", "2"],       # inductor
     "V" : ["pos", "neg"],   # voltage source
+    "I": ["pos", "neg"],    # current source
     "M" : ["drain", "gate", "source"],  # mosfet
     "Q" : ["collector", "base", "emitter"],   # bipolar transistor
     "D": ["anode", "cathode"] # diode
 }
 
 # define different types for node feature vector
-NODE_TYPES = ["component", "pin", "net"]
+NODE_TYPES = ["component", "pin", "net", "subcircuit"]
 
-COMPONENT_TYPES = ["R", "C", "L", "V", "M", "Q", "D"]
+COMPONENT_TYPES = ["R", "C", "L", "V", "M", "Q", "D", "X", "I"]
 
 PIN_TYPES = ["1", "2", "pos", "neg",
              "drain", "gate", "source",
              "collector", "base", "emitter",
              "anode", "cathode"]
 
+def clean_netlist_file(input_path, cleaned_path):
+    with open(input_path, "r") as f:
+        lines = f.readlines()
+
+    cleaned_lines = []
+    for line in lines:
+        if any(param in line.lower() for param in ["rser=", "rpar="]):
+            tokens = line.split()
+            # keep element name, node connections, first numeric/model token
+            keep = []
+            for tok in tokens:
+                if "=" in tok:  # stop before params
+                    break
+                keep.append(tok)
+            cleaned_lines.append(" ".join(keep) + "\n")
+        else:
+            cleaned_lines.append(line)
+
+    with open(cleaned_path, "w") as f:
+        f.writelines(cleaned_lines)
+
+
 def netlist_to_netgraph(file_path, use_star_structure=False):
-    parser = SpiceParser(path=file_path)
+    # clean netlist first
+    cleaned_path = file_path + ".clean"
+    clean_netlist_file(file_path, cleaned_path)
+    parser = SpiceParser(path=cleaned_path)
     circuit = parser.build_circuit()
 
     G = nx.Graph()
 
     for element in circuit.element_names:
         comp_type = element[0].upper()
+
+        # handle subcircuits like this
+        if comp_type == "X":
+            comp = circuit[element]
+            nets = [str(net) for net in comp.nodes]
+            G.add_node(element, type = "subcircuit", comp_type = "X", features = encode_node_features("subcircuit", comp_type="X"))
+
+            for i, net in enumerate(nets):
+                pin_node = f"{element}.p{i+1}"
+                G.add_node(pin_node, type="pin", component=element, pin=f"p{i+1}",
+                           features=encode_node_features("pin"))
+                G.add_edge(pin_node, element, kind="component_connection")
+                G.add_node(str(net), type="net", features=encode_node_features("net"))
+                G.add_edge(pin_node, str(net), kind="net_connection")
+
+            continue
+
         if comp_type not in PIN_ROLES:
             print(f"Element not defined in pin roles: {element}")
             continue

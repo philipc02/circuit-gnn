@@ -11,6 +11,7 @@ PIN_ROLES = {
     "C" : ["1", "2"],   # capacitor
     "L" : ["1", "2"],       # inductor
     "V" : ["pos", "neg"],   # voltage source
+    "I": ["pos", "neg"],    # current source
     "M" : ["drain", "gate", "source"],  # mosfet
     "Q" : ["collector", "base", "emitter"],   # bipolar transistor
     "D": ["anode", "cathode"] # diode
@@ -24,8 +25,32 @@ PIN_TYPES = ["1", "2", "pos", "neg",
 # wiring edge is between terminals of different components, internal is between terminals of the same component
 EDGE_TYPES = ["wiring", "internal"]
 
+def clean_netlist_file(input_path, cleaned_path):
+    with open(input_path, "r") as f:
+        lines = f.readlines()
+
+    cleaned_lines = []
+    for line in lines:
+        if any(param in line.lower() for param in ["rser=", "rpar="]):
+            tokens = line.split()
+            # keep element name, node connections, first numeric/model token
+            keep = []
+            for tok in tokens:
+                if "=" in tok:  # stop before params
+                    break
+                keep.append(tok)
+            cleaned_lines.append(" ".join(keep) + "\n")
+        else:
+            cleaned_lines.append(line)
+
+    with open(cleaned_path, "w") as f:
+        f.writelines(cleaned_lines)
+
 def netlist_to_netgraph(file_path, use_pin_nodes=False):
-    parser = SpiceParser(path=file_path)
+    # clean netlist first
+    cleaned_path = file_path + ".clean"
+    clean_netlist_file(file_path, cleaned_path)
+    parser = SpiceParser(path=cleaned_path)
     circuit = parser.build_circuit()
 
     G = nx.Graph()
@@ -131,6 +156,7 @@ def process_folder(input_folder, output_folder):
             # draw graph
             nx.draw(G, pos=pos, with_labels=True, node_size=500)
             plt.show()
+
 
 
 if __name__ == "__main__":
