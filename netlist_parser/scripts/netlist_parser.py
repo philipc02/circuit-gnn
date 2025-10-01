@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 PIN_ROLES = {
     "R" : ["1", "2"], # resistor
     "C" : ["1", "2"],   # capacitor
+    "L" : ["1", "2"],       # inductor
     "V" : ["pos", "neg"],   # voltage source
     "M" : ["drain", "gate", "source"],  # mosfet
     "Q" : ["collector", "base", "emitter"],   # bipolar transistor

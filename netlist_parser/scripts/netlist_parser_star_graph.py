@@ -9,6 +9,7 @@ import numpy as np
 PIN_ROLES = {
     "R" : ["1", "2"], # resistor
     "C" : ["1", "2"],   # capacitor
+    "L" : ["1", "2"],       # inductor
     "V" : ["pos", "neg"],   # voltage source
     "M" : ["drain", "gate", "source"],  # mosfet
     "Q" : ["collector", "base", "emitter"],   # bipolar transistor
@@ -18,7 +19,7 @@ PIN_ROLES = {
 # define different types for node feature vector
 NODE_TYPES = ["component", "pin", "net"]
 
-COMPONENT_TYPES = ["R", "C", "V", "M", "Q", "D"]
+COMPONENT_TYPES = ["R", "C", "L", "V", "M", "Q", "D"]
 
 PIN_TYPES = ["1", "2", "pos", "neg",
              "drain", "gate", "source",
