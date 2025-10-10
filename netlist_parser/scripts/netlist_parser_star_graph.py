@@ -33,7 +33,7 @@ def clean_netlist_file(input_path, cleaned_path):
 
     cleaned_lines = []
     for line in lines:
-        if any(param in line.lower() for param in ["rser=", "rpar="]):
+        if any(param in line.lower() for param in ["rser=", "rpar=", "tol=", "temp=", "ic=", "tc="]):
             tokens = line.split()
             # keep element name, node connections, first numeric/model token
             keep = []
@@ -148,11 +148,17 @@ def encode_node_features(node_type, comp_type=None, pin_type=None):
 def process_folder(input_folder, output_folder):
     os.makedirs(output_folder, exist_ok=True)
 
+    failed = 0
     for filename in os.listdir(input_folder):
         if filename.endswith((".cir", ".sp", ".net")):
             path = os.path.join(input_folder, filename)
             print(f"Processing {filename}")
-            G = netlist_to_netgraph(path, use_star_structure=True)
+            try:
+                G = netlist_to_netgraph(path, use_star_structure=True)
+            except Exception as e:
+                print(f"Failed to parse {filename}: {e}")
+                failed = failed + 1
+                continue
 
             # save graph in output folder
             graph_filename = os.path.splitext(filename)[0] + "_star.gpickle"
@@ -161,13 +167,13 @@ def process_folder(input_folder, output_folder):
                 pickle.dump(G, f)
             print(f"Saved star graph to {graph_path}")
 
-            pos = nx.kamada_kawai_layout(G)            
+            # pos = nx.kamada_kawai_layout(G)            
             # draw graph
-            nx.draw(G, pos=pos, with_labels=True, node_size=500)
-            plt.show()
-
+            # nx.draw(G, pos=pos, with_labels=True, node_size=500)
+            # plt.show()
+    print(f"Failed to parse {failed} netlists.\n")
 
 if __name__ == "__main__":
-    input_folder = "../netlists"
-    output_folder = "../graphs_star"
+    input_folder = "../netlists/netlists_ALIGN"
+    output_folder = "../graphs_star/graphs_star_ALIGN"
     process_folder(input_folder, output_folder)
