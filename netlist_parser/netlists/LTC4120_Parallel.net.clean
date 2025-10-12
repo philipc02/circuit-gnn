@@ -43,7 +43,7 @@ C13 N005 N013 1.5n
 C14 N015 N016 100n
 C15 N015 N016 33n
 C16 N012 0 22µ
-C§Battery BAT 0 3m ic=2.85
+C§Battery BAT 0 3m
 .model D D
 .lib C:\users\brian\My Documents\LTspiceXVII\lib\cmp\standard.dio
 .model NMOS NMOS

@@ -1,15 +1,15 @@
 * Z:\mnt\spice-netlists\LT1568_DC675BF10.asc
 V2 N003 0 5
 V3 N010 0 -5
-R3 N001 N005 {.66G/fc} tol=1
-RA1 N006 N005 {1.76G/fc} tol=1
+R3 N001 N005 {.66G/fc}
+RA1 N006 N005 {1.76G/fc}
 XU1 N003 N005 N006 N001 N008 0 0 N010 N010 0 0 N009 OUT N007 N002 N003 LT1568
 C§ZAB1 N002 N001 100p
-R4 OUT N002 {1.42G/fc} tol=1
-RB1 N007 N002 {1.76G/fc} tol=1
+R4 OUT N002 {1.42G/fc}
+RB1 N007 N002 {1.76G/fc}
 C§ZA3 N004 N005 100p
 V1 IN 0 AC 1
-R§ZA1 IN N004 75 tol=1
+R§ZA1 IN N004 75
 .ac oct 250 10K 10Meg
 .param fc=100k
 * LT1568 - Very Low Noise, High Frequency Active RC, Filter Building Block\n4th Order, Highpass Filter\nInput Frequency <= 10MHz

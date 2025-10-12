@@ -1,7 +1,7 @@
 * Z:\mnt\spice-netlists\LTM8021.asc
 XU1 IN IN 0 N001 OUT OUT LTM8021
 V1 IN 0 24
-R1 N001 0 19.1K tol=1
+R1 N001 0 19.1K
 C1 OUT 0 4.7µ V=6.3
 C2 IN 0 1µ V=50V
 Rload OUT 0 10

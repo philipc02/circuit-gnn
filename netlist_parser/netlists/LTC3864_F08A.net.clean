@@ -10,13 +10,13 @@ L1 N010 OUT 10µ
 R2 OUT N009 422K
 R3 N009 0 80.6K
 C3 N006 0 100p
-R4 OUT N011 100K tol=1 pwr=0.1
+R4 OUT N011 100K
 C4 OUT 0 47µ x2
 C5 IN 0 12µ
 C6 IN 0 4.7µ
 R5 N006 N005 9.53K
 R6 IN N002 100K
-Rload OUT 0 2.5 tol=1 pwr=0.1
+Rload OUT 0 2.5
 C7 N008 0 .01µ
 .model D D
 .lib C:\users\brian\My Documents\LTspiceXVII\lib\cmp\standard.dio

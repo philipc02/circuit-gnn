@@ -1,6 +1,6 @@
 * Z:\mnt\spice-netlists\LT1965.asc
 V1 IN 0 3.3
-R1 OUT N001 4.53K tol=1 pwr=0.1
+R1 OUT N001 4.53K
 R2 0 N001 4.12K
 C1 OUT 0 10µ
 C2 IN 0 10µ

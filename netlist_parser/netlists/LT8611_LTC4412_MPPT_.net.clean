@@ -1,5 +1,5 @@
 * Z:\mnt\spice-netlists\LT8611_LTC4412_MPPT_.asc
-R1 N011 0 60.4K tol=1 pwr=0.1
+R1 N011 0 60.4K
 C1 N001 0 1µ
 L1 N005 N006 4.7µ
 C2 N003 N005 .1µ

@@ -19,7 +19,7 @@ def get_graph_info_detail(graph, filename):
     # 2. Interpretation: On average, how far away the nodes are from each other.
     largest_cc = max(nx.connected_components(graph), key=len)
     G_largest = graph.subgraph(largest_cc)
-    avg_shortest_path_length = math.ceil(nx.average_shortest_path_length(G_largest))
+    avg_shortest_path_length = nx.average_shortest_path_length(G_largest)
     print(f"Average shortest path length (largest component): {avg_shortest_path_length}")
 
 
@@ -71,24 +71,81 @@ def get_graph_info_summary(graph, filename):
     for k, v in comp_type_counts.items():
         stats[f"num_components_{k}"] = v
 
+    # find ratios
+    num_components = node_types.get("component", 0)
+    num_pins = node_types.get("pin", 0)
+    num_nets = node_types.get("net", 0)
+
+    # avoid division by zero
+    if num_components > 0:
+        stats["net_to_component_ratio"] = num_nets / num_components
+        stats["pin_to_component_ratio"] = num_pins / num_components
+    else:
+        stats["net_to_component_ratio"] = 0
+        stats["pin_to_component_ratio"] = 0
+
+    # average number of connections per net
+    net_nodes = [n for n in graph.nodes if graph.nodes[n].get("type") == "net"]
+    if len(net_nodes) > 0:
+        avg_conn_per_net = sum(dict(graph.degree(net_nodes)).values()) / len(net_nodes)
+    else:
+        avg_conn_per_net = 0
+    stats["avg_connections_per_net"] = avg_conn_per_net
+
     return stats
 
 
 def process_folder(graph_folder):
     graph_stats = []
+    # collect global counts for each component type across all graphs, useful for later weighting to counter dataset imbalances
+    global_comp_counter = Counter()
     for filename in os.listdir(graph_folder):
         if filename.endswith(".gpickle"):
             path = os.path.join(graph_folder, filename)
             with open(path, "rb") as f:
                 G = pickle.load(f)
-            get_graph_info_detail(G, filename)
+            get_graph_info_detail(G, filename)  # print details onto console
             stats = get_graph_info_summary(G, filename)
             graph_stats.append(stats)
 
+            comp_types = [
+                G.nodes[n].get("comp_type")
+                for n in G.nodes
+                if G.nodes[n].get("type") == "component" and G.nodes[n].get("comp_type") is not None
+            ]
+            global_comp_counter.update(comp_types)
+
     # save graph statistics into a csv file
     df = pd.DataFrame(graph_stats)
-    df.to_csv("graph_statistics_align.csv", index=False, sep=";")
+    df = pd.DataFrame(graph_stats).fillna(0)  # fill missing columns with 0
+    # dataset-level summaries
+    numeric_cols = ["num_nodes", "num_edges", "average_shortest_path_length", "density", "net_to_component_ratio", "pin_to_component_ratio", "avg_connections_per_net"]
+    summary = df[numeric_cols].mean().to_frame().T
+
+    node_type_cols = [c for c in df.columns if c.startswith("num_nodes_")]
+    comp_type_cols = [c for c in df.columns if c.startswith("num_components_")]
+
+    node_type_avg = pd.DataFrame([df[node_type_cols].mean()]) if node_type_cols else pd.DataFrame()
+    comp_type_avg = pd.DataFrame([df[comp_type_cols].mean()]) if comp_type_cols else pd.DataFrame()
+    summary_full = pd.concat([summary, node_type_avg, comp_type_avg], axis=1)
+    summary_full.index = ["mean"]
+
+    total_components = sum(global_comp_counter.values())
+    freq_rows = []
+    for comp_type, count in global_comp_counter.items():
+        freq_rows.append({
+            "component_type": comp_type,
+            "count": count,
+            "relative_frequency_percent": (count / total_components * 100) if total_components > 0 else 0
+        })
+    freq_df = pd.DataFrame(freq_rows).sort_values("count", ascending=False)
+
+    with open("graph_statistics_summary.csv", "w", encoding="utf-8") as f:
+        summary_full.to_csv(f, sep=";", decimal=",")
+        f.write("\n\n# Global component class frequencies\n")
+        freq_df.to_csv(f, sep=";", index=False, decimal=",")
+    # df.to_csv("graph_statistics.csv", index=False, sep=";")
 
 if __name__ == "__main__":
-    graph_folder = "graph_data_ALIGN"
+    graph_folder = "graph_data"
     process_folder(graph_folder)

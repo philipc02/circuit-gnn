@@ -1,17 +1,17 @@
 * Z:\mnt\spice-netlists\LT1568_DC675BF11.asc
-R3 N008 N003 {1G/fc} tol=1
+R3 N008 N003 {1G/fc}
 X N004 N006 N003 N008 N001 N009 N009 0 0 0 N009 O2 O1 N007 N002 N004 LT1568
 C§ZA3 N005 N003 68p
-R2 N003 N006 {1G/fc} tol=1
-RB1 N007 N002 {1G/fc} tol=1
-R4 O1 N002 {1G/fc} tol=1
+R2 N003 N006 {1G/fc}
+RB1 N007 N002 {1G/fc}
+R4 O1 N002 {1G/fc}
 V2 N004 0 5
 V1 IN 0 PULSE(0 5 1u 5n 5n 0.5u 1u)
-R§ZA1 IN N005 {6.2G/fc} tol=1
+R§ZA1 IN N005 {6.2G/fc}
 CN1 N002 N003 27p
-R§ZAB1 N002 N001 {1G/fc} tol=1
+R§ZAB1 N002 N001 {1G/fc}
 CD3 N009 0 0.1µ
-R§ZA2 N005 0 {1G/fc} tol=1
+R§ZA2 N005 0 {1G/fc}
 .tran 25u
 .param fc=1Meg
 * LT1568 - Very Low Noise, High Frequency Active RC, Filter Building Block\nA Squarewave to Differential Sinewave Converter\nfc Range: 50kHz to 5MHz

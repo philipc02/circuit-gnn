@@ -129,6 +129,8 @@ def netlist_to_netgraph(file_path, use_star_structure=False):
     return G
 
 def encode_node_features(node_type, comp_type=None, pin_type=None):
+    # below: encoding node features using one hot vectors and encoding them
+    '''
     # one hot encoding for node type
     node_vec = np.zeros(len(NODE_TYPES))
     node_vec[NODE_TYPES.index(node_type)] = 1
@@ -144,6 +146,20 @@ def encode_node_features(node_type, comp_type=None, pin_type=None):
         pin_vec[PIN_TYPES.index(pin_type)] = 1
     # concatenate vectors together -> node feature vector will have length 21
     return np.concatenate([node_vec, comp_vec, pin_vec])
+    '''
+    # second option: store indices, when constructing GNN later in pytorch, we can extract these indices and feed them into embeddings using nn.Embedding
+    node_type_idx = NODE_TYPES.index(node_type)
+
+    # component and pin types default to -1 if this is not the node type
+    comp_type_idx = COMPONENT_TYPES.index(comp_type) if (comp_type in COMPONENT_TYPES) else -1
+    pin_type_idx  = PIN_TYPES.index(pin_type) if (pin_type in PIN_TYPES) else -1
+
+    # store indices
+    return {
+        "node_type_idx": node_type_idx,
+        "comp_type_idx": comp_type_idx,
+        "pin_type_idx": pin_type_idx
+    }
 
 def process_folder(input_folder, output_folder):
     os.makedirs(output_folder, exist_ok=True)
@@ -174,6 +190,6 @@ def process_folder(input_folder, output_folder):
     print(f"Failed to parse {failed} netlists.\n")
 
 if __name__ == "__main__":
-    input_folder = "../netlists/netlists_ALIGN"
-    output_folder = "../graphs_star/graphs_star_ALIGN"
+    input_folder = "../netlists"
+    output_folder = "../graphs_star"
     process_folder(input_folder, output_folder)

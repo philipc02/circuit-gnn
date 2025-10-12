@@ -1,6 +1,6 @@
 * Z:\mnt\spice-netlists\LT3010.asc
 V1 IN 0 30
-R1 OUT N001 412K tol=1 pwr=0.1
+R1 OUT N001 412K
 R2 0 N001 1Meg
 C2 OUT 0 1µ
 C4 IN 0 1µ
