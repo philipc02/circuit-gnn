@@ -37,29 +37,6 @@ def get_graph_info_detail(graph, filename):
     comp_types = [c for c in comp_types if c is not None] # remove empty entries (node is not a component)
     print(f"Component type counts: {dict(Counter(comp_types))}\n\n")
 
-     # === Diagnostic checks for hypothesis testing ===
-    print("---- Diagnostic checks ----")
-
-    # (a) Check if any pin nodes accidentally have component types
-    pins_with_comptype = [
-        n for n, d in graph.nodes(data=True)
-        if d.get("type") == "pin" and d.get("comp_type") is not None
-    ]
-    print(f"Pins that have a 'comp_type' label (should be 0): {len(pins_with_comptype)}")
-
-    # (b) Count how many subcircuits exist (X components)
-    num_subcircuits = sum(
-        1 for _, d in graph.nodes(data=True)
-        if d.get("type") in ["component", "subcircuit"] and d.get("comp_type") == "X"
-    )
-    print(f"Number of subcircuits (X): {num_subcircuits}")
-
-    # (c) Distribution of component types (double-check)
-    comp_type_distribution = Counter(
-        d.get("comp_type") for _, d in graph.nodes(data=True)
-        if d.get("type") == "component"
-    )
-    print("Component type distribution:", dict(comp_type_distribution))
 
     # hubs -> which component type (question: what if a net node is a hub?)
     # hub here is node with the most edge connections -> component has max 3 pins, hub more likely to be net or subcircuit node => doesn't make sense to find component type
