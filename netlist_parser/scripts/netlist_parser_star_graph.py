@@ -182,12 +182,30 @@ def process_folder(input_folder, output_folder):
             with open(graph_path, "wb") as f:
                 pickle.dump(G, f)
             print(f"Saved star graph to {graph_path}")
+            sanity_check(filename, G)
 
             # pos = nx.kamada_kawai_layout(G)            
             # draw graph
             # nx.draw(G, pos=pos, with_labels=True, node_size=500)
             # plt.show()
     print(f"Failed to parse {failed} netlists.\n")
+
+def sanity_check(file_path, G):
+    with open(file_path, "r") as f:
+        lines = [l.strip() for l in f if l.strip() and not l.strip().startswith("*")]
+    netlist_components = [l for l in lines if not l[0] == '.'] 
+
+    graph_components = sum(1 for _, d in G.nodes(data=True)
+                           if d["type"] in ["component", "subcircuit"])
+
+    print(f"File: {os.path.basename(file_path)}")
+    print(f"Netlist component lines: {len(netlist_components)}")
+    print(f"Graph component/subcircuit nodes: {graph_components}")
+
+    if len(netlist_components) == graph_components:
+        print("Component count matches.\n")
+    else:
+        print("Mismatch detected.\n")
 
 if __name__ == "__main__":
     input_folder = "../netlists"
