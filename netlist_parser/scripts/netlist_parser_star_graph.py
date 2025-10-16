@@ -14,14 +14,13 @@ PIN_ROLES = {
     "I": ["pos", "neg"],    # current source
     "M" : ["drain", "gate", "source"],  # mosfet
     "Q" : ["collector", "base", "emitter"],   # bipolar transistor
-    "D": ["anode", "cathode"], # diode
-    "J" : ["drain", "gate", "source"]  # JFET
+    "D": ["anode", "cathode"] # diode
 }
 
 # define different types for node feature vector
 NODE_TYPES = ["component", "pin", "net", "subcircuit"]
 
-COMPONENT_TYPES = ["R", "C", "L", "V", "M", "Q", "D", "X", "I", "J", "A", "G"]  # A: arbritrary behaviorial component, G: behaviorial current source
+COMPONENT_TYPES = ["R", "C", "L", "V", "M", "Q", "D", "X", "I", "A", "G"]  # A: arbritrary behaviorial component, G: behaviorial current source
 
 PIN_TYPES = ["1", "2", "pos", "neg",
              "drain", "gate", "source",
@@ -55,11 +54,11 @@ def netlist_to_netgraph(file_path, use_star_structure=False):
     cleaned_path = file_path + ".clean"
     clean_netlist_file(file_path, cleaned_path)
 
-    # skip netlists with S elements (unsupported by PySpice) and E/B elements (very rare)
+    # skip netlists with S elements (unsupported by PySpice) and J/E/B elements (very rare)
     with open(cleaned_path, "r") as f:
         lines = [l.strip() for l in f if l.strip() and not l.startswith("*")]
     for l in lines:
-        if l[0].upper() in {"S", "E", "B"} :  
+        if l[0].upper() in {"S", "E", "B", "J"} :  
             print(f"Skipping {file_path} due to unsupported/rare element: {l}")
             return None
         
