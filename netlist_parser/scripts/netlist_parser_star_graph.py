@@ -14,13 +14,14 @@ PIN_ROLES = {
     "I": ["pos", "neg"],    # current source
     "M" : ["drain", "gate", "source"],  # mosfet
     "Q" : ["collector", "base", "emitter"],   # bipolar transistor
-    "D": ["anode", "cathode"] # diode
+    "D": ["anode", "cathode"], # diode
+    "J" : ["drain", "gate", "source"]  # JFET
 }
 
 # define different types for node feature vector
 NODE_TYPES = ["component", "pin", "net", "subcircuit"]
 
-COMPONENT_TYPES = ["R", "C", "L", "V", "M", "Q", "D", "X", "I"]
+COMPONENT_TYPES = ["R", "C", "L", "V", "M", "Q", "D", "X", "I", "J", "A", "G"]  # A: arbritrary behaviorial component, G: behaviorial current source
 
 PIN_TYPES = ["1", "2", "pos", "neg",
              "drain", "gate", "source",
@@ -53,8 +54,21 @@ def netlist_to_netgraph(file_path, use_star_structure=False):
     # clean netlist first
     cleaned_path = file_path + ".clean"
     clean_netlist_file(file_path, cleaned_path)
+
+    # skip netlists with S elements (unsupported by PySpice) and E/B elements (very rare)
+    with open(cleaned_path, "r") as f:
+        lines = [l.strip() for l in f if l.strip() and not l.startswith("*")]
+    for l in lines:
+        if l[0].upper() in {"S", "E", "B"} :  
+            print(f"Skipping {file_path} due to unsupported/rare element: {l}")
+            return None
+        
     parser = SpiceParser(path=cleaned_path)
-    circuit = parser.build_circuit()
+    try:
+        circuit = parser.build_circuit()
+    except Exception as e:
+        print(f"Failed to parse {file_path}: {e}")
+        return None
 
     G = nx.Graph()
 
@@ -77,6 +91,37 @@ def netlist_to_netgraph(file_path, use_star_structure=False):
 
             continue
 
+        # handle arbritrary behaviorial components like subcircuits
+        elif comp_type == "A" or comp_type == "G":
+            comp = circuit[element]
+            nets = [str(net) for net in comp.nodes]
+            # LTspice stores the model name in .model or .parameters
+            subtype = getattr(comp, "model", None) or getattr(comp, "parameters", None)
+            if subtype:
+                subtype = str(subtype)
+            else:
+                if comp_type == "A":
+                    subtype = "A_BLOCK"
+                else:
+                    subtype = "G_BLOCK"
+
+            if comp_type == "A":
+                G.add_node(element, type="subcircuit", comp_type="A", subtype=subtype,
+                       features=encode_node_features("subcircuit", comp_type="A"))
+            else:
+                G.add_node(element, type="subcircuit", comp_type="G", subtype=subtype,
+                       features=encode_node_features("subcircuit", comp_type="G"))
+
+            # pins similar to subcircuits
+            for i, net in enumerate(nets):
+                pin_node = f"{element}.p{i+1}"
+                G.add_node(pin_node, type="pin", component=element, pin=f"p{i+1}",
+                           features=encode_node_features("pin"))
+                G.add_edge(pin_node, element, kind="component_connection")
+                G.add_node(str(net), type="net", features=encode_node_features("net"))
+                G.add_edge(pin_node, str(net), kind="net_connection")
+            continue
+
         if comp_type not in PIN_ROLES:
             print(f"Element not defined in pin roles: {element}")
             continue
@@ -96,6 +141,10 @@ def netlist_to_netgraph(file_path, use_star_structure=False):
         # drop diode model name
         if comp_type == "D" and len(nets) == 3:
             nets = nets[:2]
+
+        # drop model name for JFET
+        if comp_type == "J" and len(nets) == 4:
+            nets = nets[:3]
 
         if use_star_structure:
             # central component node
@@ -165,12 +214,16 @@ def process_folder(input_folder, output_folder):
     os.makedirs(output_folder, exist_ok=True)
 
     failed = 0
+    mismatched = []
     for filename in os.listdir(input_folder):
         if filename.endswith((".cir", ".sp", ".net")):
             path = os.path.join(input_folder, filename)
             print(f"Processing {filename}")
             try:
                 G = netlist_to_netgraph(path, use_star_structure=True)
+                if G is None:
+                    failed += 1
+                    continue
             except Exception as e:
                 print(f"Failed to parse {filename}: {e}")
                 failed = failed + 1
@@ -182,18 +235,39 @@ def process_folder(input_folder, output_folder):
             with open(graph_path, "wb") as f:
                 pickle.dump(G, f)
             print(f"Saved star graph to {graph_path}")
-            sanity_check(filename, G)
+            if not sanity_check(path, G):
+                mismatched.append(filename)
 
             # pos = nx.kamada_kawai_layout(G)            
             # draw graph
             # nx.draw(G, pos=pos, with_labels=True, node_size=500)
             # plt.show()
     print(f"Failed to parse {failed} netlists.\n")
+    print(f"Netlists with mismatched component counts: {len(mismatched)}")  # should be 0 now
+    if mismatched:
+        print("   → " + ", ".join(mismatched))
 
 def sanity_check(file_path, G):
     with open(file_path, "r") as f:
         lines = [l.strip() for l in f if l.strip() and not l.strip().startswith("*")]
-    netlist_components = [l for l in lines if not l[0] == '.'] 
+    
+    # ignore lines inside subcircuit definitions
+    in_subckt = False
+    filtered_lines = []
+    for l in lines:
+        l_upper = l.upper()
+        if l_upper.startswith(".SUBCKT"):
+            in_subckt = True
+            continue
+        elif l_upper.startswith(".ENDS"):
+            in_subckt = False
+            continue
+        if not in_subckt:
+            filtered_lines.append(l)
+    
+    # ignoring K (inductance coupling) entries in netlist as we are only looking at physical connections
+    ignore_prefixes = ('.', 'K', '+')
+    netlist_components = [l for l in filtered_lines if not l[0].upper().startswith(ignore_prefixes)] 
 
     graph_components = sum(1 for _, d in G.nodes(data=True)
                            if d["type"] in ["component", "subcircuit"])
@@ -203,9 +277,11 @@ def sanity_check(file_path, G):
     print(f"Graph component/subcircuit nodes: {graph_components}")
 
     if len(netlist_components) == graph_components:
-        print("Component count matches.\n")
+        print("Component count matches\n")
+        return True
     else:
-        print("Mismatch detected.\n")
+        print("Mismatch detected\n")
+        return False
 
 if __name__ == "__main__":
     input_folder = "../netlists"
