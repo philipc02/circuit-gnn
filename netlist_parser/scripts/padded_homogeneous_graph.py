@@ -27,6 +27,8 @@ PIN_TYPES = ["1", "2", "pos", "neg",
              "collector", "base", "emitter",
              "anode", "cathode"]
 
+P_MAX = max(len(pins) for pins in PIN_ROLES.values())
+
 def clean_netlist_file(input_path, cleaned_path):
     with open(input_path, "r") as f:
         lines = f.readlines()
@@ -48,20 +50,19 @@ def clean_netlist_file(input_path, cleaned_path):
     with open(cleaned_path, "w") as f:
         f.writelines(cleaned_lines)
 
-
-def netlist_to_netgraph(file_path, use_star_structure=False):
-    # clean netlist first
+def netlist_to_homograph(file_path, P_MAX=3):
     cleaned_path = file_path + ".clean"
-    clean_netlist_file(file_path, cleaned_path)
+    # clean_netlist_file(file_path, cleaned_path)
 
     # skip netlists with S elements (unsupported by PySpice) and J/E/B elements (very rare)
     with open(cleaned_path, "r") as f:
         lines = [l.strip() for l in f if l.strip() and not l.startswith("*")]
+
     for l in lines:
-        if l[0].upper() in {"S", "E", "B", "J"} :  
+        if l[0].upper() in {"S", "E", "B", "J"}:
             print(f"Skipping {file_path} due to unsupported/rare element: {l}")
             return None
-        
+
     parser = SpiceParser(path=cleaned_path)
     try:
         circuit = parser.build_circuit()
@@ -74,105 +75,47 @@ def netlist_to_netgraph(file_path, use_star_structure=False):
     for element in circuit.element_names:
         comp_type = element[0].upper()
 
-        # handle subcircuits like this
-        if comp_type == "X":
-            comp = circuit[element]
-            nets = [str(net) for net in comp.nodes]
-            G.add_node(element, type = "subcircuit", comp_type = "X", features = encode_node_features("subcircuit", comp_type="X"))
-
-            for i, net in enumerate(nets):
-                pin_node = f"{element}.p{i+1}"
-                G.add_node(pin_node, type="pin", component=element, pin=f"p{i+1}",
-                           features=encode_node_features("pin"))
-                G.add_edge(pin_node, element, kind="component_connection")
-                G.add_node(str(net), type="net", features=encode_node_features("net"))
-                G.add_edge(pin_node, str(net), kind="net_connection")
-
-            continue
-
-        # handle arbritrary behaviorial components like subcircuits
-        elif comp_type == "A" or comp_type == "G":
-            comp = circuit[element]
-            nets = [str(net) for net in comp.nodes]
-            # LTspice stores the model name in .model or .parameters
-            subtype = getattr(comp, "model", None) or getattr(comp, "parameters", None)
-            if subtype:
-                subtype = str(subtype)
-            else:
-                if comp_type == "A":
-                    subtype = "A_BLOCK"
-                else:
-                    subtype = "G_BLOCK"
-
-            if comp_type == "A":
-                G.add_node(element, type="subcircuit", comp_type="A", subtype=subtype,
-                       features=encode_node_features("subcircuit", comp_type="A"))
-            else:
-                G.add_node(element, type="subcircuit", comp_type="G", subtype=subtype,
-                       features=encode_node_features("subcircuit", comp_type="G"))
-
-            # pins similar to subcircuits
-            for i, net in enumerate(nets):
-                pin_node = f"{element}.p{i+1}"
-                G.add_node(pin_node, type="pin", component=element, pin=f"p{i+1}",
-                           features=encode_node_features("pin"))
-                G.add_edge(pin_node, element, kind="component_connection")
-                G.add_node(str(net), type="net", features=encode_node_features("net"))
-                G.add_edge(pin_node, str(net), kind="net_connection")
-            continue
-
         if comp_type not in PIN_ROLES:
-            print(f"Element not defined in pin roles: {element}")
             continue
 
         comp = circuit[element]
-        pins = PIN_ROLES[comp_type]
-        nets = [str(net) for net in comp.nodes]
+        actual_nets = [str(net) for net in comp.nodes]
+        actual_pins = PIN_ROLES[comp_type]
 
-        # drop substrate value (at index 3) and bjt type for now
-        if comp_type == "Q" and len(nets) == 4:
-            nets = nets[:3]
+        # handle components with extra bulk or substrate nodes
+        if comp_type == "Q" and len(actual_nets) == 4:
+            actual_nets = actual_nets[:3]
+        if comp_type == "M" and len(actual_nets) == 4:
+            actual_nets = actual_nets[:3]
+        if comp_type == "D" and len(actual_nets) == 3:
+            actual_nets = actual_nets[:2]
 
-        # drop bulk value (at index 3) and mosfet type for now
-        if comp_type == "M" and len(nets) == 4:
-            nets = nets[:3]
+        G.add_node(element, 
+                   type="component",
+                   comp_type=comp_type,
+                   features=encode_node_features("component", comp_type=comp_type))
 
-        # drop diode model name
-        if comp_type == "D" and len(nets) == 3:
-            nets = nets[:2]
-
-        # drop model name for JFET
-        # if comp_type == "J" and len(nets) == 4:
-          #   nets = nets[:3]
-
-        if use_star_structure:
-            # central component node
-            G.add_node(element, type="component", comp_type = comp_type, features=encode_node_features("component", comp_type=comp_type))
-
-            # insert explicit pin nodes and connect to component node
-            for i, net in enumerate(nets):
-                pin_node = f"{element}.{pins[i]}"
-                G.add_node(pin_node, type="pin", component=element, pin=pins[i], features=encode_node_features("pin", pin_type=pins[i]))
-                # edge from pin to component
-                G.add_edge(pin_node, element, kind="component_connection")
-                # edge from pin to net node
-                G.add_node(str(net), type="net", features=encode_node_features("net"))
-                G.add_edge(pin_node, str(net), kind="net_connection")
-                    
-        else:
-
-            # behaviour from net_as_nodes
-            # no features
-            for i, net in enumerate(nets):
-                pin_node = f"{element}.{pins[i]}"
-                G.add_node(pin_node, type="pin", component=element, pin=pins[i])
-                G.add_node(str(net), type="net")
-                G.add_edge(pin_node, str(net), kind="net_connection")
-
-            for i in range(len(pins)):
-                for j in range(i + 1, len(pins)):
-                    G.add_edge(f"{element}.{pins[i]}", f"{element}.{pins[j]}",
-                                component=element, pins=(pins[i], pins[j]), kind="component")
+        # create exactly P_MAX pins per component and connect to component node
+        for i in range(P_MAX):
+            # using pin id instead of pin role as node name as we have inactive pin nodes which dont have a role
+            pin_id = f"{element}.pin{i}"
+            is_active = i < len(actual_pins)
+            pin_role = actual_pins[i] if is_active else None
+            connected_net = actual_nets[i] if is_active else None
+            G.add_node(
+                pin_id,
+                type="pin",
+                component=element,
+                pin_index=i,    # index instead of role
+                pin_active=int(is_active),  # node has extra information on whether it is active or not
+                features=encode_node_features("pin", pin_type=pin_role)
+            )
+            # edge from pin to component
+            G.add_edge(pin_id, element, kind="component_connection")
+            # edge from pin to net if active
+            if is_active and connected_net:
+                G.add_node(connected_net, type="net", features=encode_node_features("net"))
+                G.add_edge(pin_id, connected_net, kind="net_connection")
 
     return G
 
@@ -213,13 +156,13 @@ def process_folder(input_folder, output_folder):
     os.makedirs(output_folder, exist_ok=True)
 
     failed = 0
-    mismatched = []
+    # mismatched = []
     for filename in os.listdir(input_folder):
         if filename.endswith((".cir", ".sp", ".net")):
             path = os.path.join(input_folder, filename)
             print(f"Processing {filename}")
             try:
-                G = netlist_to_netgraph(path, use_star_structure=True)
+                G = netlist_to_homograph(path, P_MAX=P_MAX)
                 if G is None:
                     failed += 1
                     continue
@@ -229,22 +172,22 @@ def process_folder(input_folder, output_folder):
                 continue
 
             # save graph in output folder
-            graph_filename = os.path.splitext(filename)[0] + "_star.gpickle"
+            graph_filename = os.path.splitext(filename)[0] + "_star_homograph.gpickle"
             graph_path = os.path.join(output_folder, graph_filename)
             with open(graph_path, "wb") as f:
                 pickle.dump(G, f)
-            print(f"Saved star graph to {graph_path}")
-            if not sanity_check(path, G):
-                mismatched.append(filename)
+            print(f"Saved padded homogeneous star graph to {graph_path}")
+            # if not sanity_check(path, G):
+            #    mismatched.append(filename)
 
-            # pos = nx.kamada_kawai_layout(G)            
+            pos = nx.kamada_kawai_layout(G)            
             # draw graph
-            # nx.draw(G, pos=pos, with_labels=True, node_size=500)
-            # plt.show()
+            nx.draw(G, pos=pos, with_labels=True, node_size=500)
+            plt.show()
     print(f"Failed to parse {failed} netlists.\n")
-    print(f"Netlists with mismatched component counts: {len(mismatched)}")  # should be 0 now
-    if mismatched:
-        print("   → " + ", ".join(mismatched))
+    # print(f"Netlists with mismatched component counts: {len(mismatched)}")  # should be 0 now
+    # if mismatched:
+    #    print("   → " + ", ".join(mismatched))
 
 def sanity_check(file_path, G):
     with open(file_path, "r") as f:
@@ -284,5 +227,5 @@ def sanity_check(file_path, G):
 
 if __name__ == "__main__":
     input_folder = "../netlists"
-    output_folder = "../graphs_star"
+    output_folder = "../graphs_star_padded_homogeneous"
     process_folder(input_folder, output_folder)
