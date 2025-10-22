@@ -213,7 +213,7 @@ def process_folder(input_folder, output_folder):
     os.makedirs(output_folder, exist_ok=True)
 
     failed = 0
-    mismatched = []
+    # mismatched = []
     for filename in os.listdir(input_folder):
         if filename.endswith((".cir", ".sp", ".net")):
             path = os.path.join(input_folder, filename)
@@ -234,17 +234,77 @@ def process_folder(input_folder, output_folder):
             with open(graph_path, "wb") as f:
                 pickle.dump(G, f)
             print(f"Saved star graph to {graph_path}")
-            if not sanity_check(path, G):
-                mismatched.append(filename)
+            # if not sanity_check(path, G):
+            #     mismatched.append(filename)
 
             # pos = nx.kamada_kawai_layout(G)            
             # draw graph
             # nx.draw(G, pos=pos, with_labels=True, node_size=500)
             # plt.show()
     print(f"Failed to parse {failed} netlists.\n")
-    print(f"Netlists with mismatched component counts: {len(mismatched)}")  # should be 0 now
-    if mismatched:
-        print("   → " + ", ".join(mismatched))
+    # print(f"Netlists with mismatched component counts: {len(mismatched)}")  # should be 0 now
+    # if mismatched:
+    #    print("   → " + ", ".join(mismatched))
+
+def remove_duplicate_graphs(folder):
+    import hashlib
+
+    print(f"Checking for duplicate graphs in {folder}\n")
+
+    unique_hashes = {}
+    duplicates = []
+
+    def graph_signature(G):
+        
+        def serialize_features(fdict):
+            # Convert feature dicts to a sorted tuple of (key, value)
+            if isinstance(fdict, dict):
+                return tuple(sorted(fdict.items()))
+            return fdict
+
+        # Make node and edge lists deterministic
+        node_data = sorted(
+            (
+                d.get("type"),
+                d.get("comp_type"),
+                d.get("pin"),
+                serialize_features(d.get("features", {})),
+            )
+            for _, d in G.nodes(data=True)
+        )
+
+        edge_data = sorted(
+            (tuple(sorted((u, v))), d.get("kind")) for u, v, d in G.edges(data=True)
+        )
+
+        # Hash everything
+        m = hashlib.sha256()
+        m.update(str(node_data).encode())
+        m.update(str(edge_data).encode())
+        return m.hexdigest()
+
+
+    for fname in os.listdir(folder):
+        if not fname.endswith(".gpickle"):
+            continue
+        path = os.path.join(folder, fname)
+        with open(path, "rb") as f:
+            G = pickle.load(f)
+
+        sig = graph_signature(G)
+        if sig in unique_hashes:
+            orig = unique_hashes[sig]
+            duplicates.append((fname, orig))
+        else:
+            unique_hashes[sig] = fname
+
+    print(f"Found {len(duplicates)} duplicates out of {len(unique_hashes) + len(duplicates)} total graphs")
+
+    # remove duplicates
+    for dup, orig in duplicates:
+        os.remove(os.path.join(folder, dup))
+        print(f"Removed duplicate: {dup} (matched {orig})")
+
 
 def sanity_check(file_path, G):
     with open(file_path, "r") as f:
@@ -285,4 +345,5 @@ def sanity_check(file_path, G):
 if __name__ == "__main__":
     input_folder = "../netlists"
     output_folder = "../graphs_star"
-    process_folder(input_folder, output_folder)
+    # process_folder(input_folder, output_folder)
+    remove_duplicate_graphs(output_folder)
