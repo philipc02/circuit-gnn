@@ -51,7 +51,7 @@ def load_dataset():
 
 # class definition for HeteroConv model with GraphSAGE layers
 class HeteroSAGE(torch.nn.Module):
-    def __init__(self, hidden_channels, num_classes):
+    def __init__(self, hidden_channels, num_classes, num_layers=3):
         super().__init__()
 
         # add embedding layers using nn.Embedding
@@ -63,28 +63,35 @@ class HeteroSAGE(torch.nn.Module):
         # different message passing rules for different edge types
         # -1: input shape inferred automatically (tuple as we have (in_src, in_dst) hetero graphs could have different feature sizes for diff node types (not in this case))
         # outpit dim is hidden_channels
-        self.convs1 = HeteroConv({
-            ("component", "component_connection", "pin"): SAGEConv((-1, -1), hidden_channels),
-            ("pin", "component_connection", "component"): SAGEConv((-1, -1), hidden_channels),
-            ("subcircuit", "component_connection", "pin"): SAGEConv((-1, -1), hidden_channels),
-            ("pin", "component_connection", "subcircuit"): SAGEConv((-1, -1), hidden_channels),
-            ("pin", "net_connection", "net"): SAGEConv((-1, -1), hidden_channels),
-            ("net", "net_connection", "pin"): SAGEConv((-1, -1), hidden_channels),
-        }, aggr="sum")
-
-        # layer 2: second propagation
+        # for all layers after first:
         # input shape here is known already from prev layer
-        self.convs2 = HeteroConv({
-            ("component", "component_connection", "pin"): SAGEConv((hidden_channels, hidden_channels), hidden_channels),
-            ("pin", "component_connection", "component"): SAGEConv((hidden_channels, hidden_channels), hidden_channels),
-            ("subcircuit", "component_connection", "pin"): SAGEConv((hidden_channels, hidden_channels), hidden_channels),
-            ("pin", "component_connection", "subcircuit"): SAGEConv((hidden_channels, hidden_channels), hidden_channels),
-            ("pin", "net_connection", "net"): SAGEConv((hidden_channels, hidden_channels), hidden_channels),
-            ("net", "net_connection", "pin"): SAGEConv((hidden_channels, hidden_channels), hidden_channels),
-        }, aggr="sum")
+        self.convs = nn.ModuleList()
+        for i in range(num_layers):
+            conv_dict = {
+                ("component", "component_connection", "pin"): SAGEConv((-1, -1) if i == 0 else (hidden_channels, hidden_channels), hidden_channels),
+                ("pin", "component_connection", "component"): SAGEConv((-1, -1) if i == 0 else (hidden_channels, hidden_channels), hidden_channels),
+                ("subcircuit", "component_connection", "pin"): SAGEConv((-1, -1) if i == 0 else (hidden_channels, hidden_channels), hidden_channels),
+                ("pin", "component_connection", "subcircuit"): SAGEConv((-1, -1) if i == 0 else (hidden_channels, hidden_channels), hidden_channels),
+                ("pin", "net_connection", "net"): SAGEConv((-1, -1) if i == 0 else (hidden_channels, hidden_channels), hidden_channels),
+                ("net", "net_connection", "pin"): SAGEConv((-1, -1) if i == 0 else (hidden_channels, hidden_channels), hidden_channels),
+            }
+            self.convs.append(HeteroConv(conv_dict, aggr="sum"))
+
+        # add dropout for regularization (preventing overfitting, better generalization): randomly disable neurons during training with probability p 
+        # -> forces remaining neurons to learn more robust features
+        # here 30 percent of neurons are disabled during training
+        self.dropout = nn.Dropout(0.3)
 
         # classifier head only for component nodes (the ones with labels)
-        self.classifier = nn.Linear(hidden_channels, num_classes)
+        # self.classifier = nn.Linear(hidden_channels, num_classes)
+
+        # non linear classifier to capture more complex patterns (multi layer)
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_channels, hidden_channels // 2),   # layer 1
+            nn.ReLU(),  # activation
+            nn.Dropout(0.2),    # regularization
+            nn.Linear(hidden_channels // 2, num_classes)    # layer 2
+        )
 
     # forward pass
     def forward(self, x_dict, edge_index_dict): # takes node features and graph structure; x_dict and edge_index_dict are needed as they store the features for the different node and edge types
@@ -106,15 +113,13 @@ class HeteroSAGE(torch.nn.Module):
 
             x_dict[node_type] = x_emb # replace tuples with indices with new embedding
 
-        # first message passing
-        x_dict = self.convs1(x_dict, edge_index_dict)
-        # ReLU (Rectified Linear Unit): activation function between layers in NN -> ReLU(x) = max(0, x) (if value is positive, keep, else set to zero) => helps network learn nonlinear patterns
-        x_dict = {k: x.relu() for k, x in x_dict.items()}
-
-        # second message passing
-        x_dict = self.convs2(x_dict, edge_index_dict)
-        # relu activation
-        x_dict = {k: x.relu() for k, x in x_dict.items()}
+        # message passing for all layers with dropout
+        for i, conv in enumerate(self.convs):
+            x_dict = conv(x_dict, edge_index_dict)
+            # ReLU (Rectified Linear Unit): activation function between layers in NN -> ReLU(x) = max(0, x) (if value is positive, keep, else set to zero) => helps network learn nonlinear patterns
+            x_dict = {k: x.relu() for k, x in x_dict.items()}
+            if i < len(self.convs) - 1:  # no dropout after last layer
+                x_dict = {k: self.dropout(x) for k, x in x_dict.items()}
 
         # return logits for component nodes only
         # classifying into 8 component types (subcircuit excluded), the model needs to output 8 logits (raw, unnormalized output values from the final layer of a model, just before applying f.ex. softmax) per node
