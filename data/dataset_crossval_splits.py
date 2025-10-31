@@ -3,7 +3,7 @@ import random
 import shutil
 import numpy as np
 
-def create_kfold_splits(source_folder="../netlist_parser/graphs_star", output_root="data_kfold", k=5, seed=42):
+def create_kfold_splits(source_folder="../netlist_parser/graphs_star_padded_homogeneous", output_root="data_kfold_padded_homogeneous", k=5, seed=42):
     random.seed(seed)
 
     os.makedirs(output_root, exist_ok=True)

@@ -2,7 +2,7 @@ import os
 import random
 import shutil
 
-def create_splits(source_folder="../netlist_parser/graphs_star", output_root=".", split_ratio=(0.7, 0.15, 0.15), seed=42):
+def create_splits(source_folder="../netlist_parser/graphs_star_padded_homogeneous", output_root="data_conventional_padded_homogeneous/", split_ratio=(0.7, 0.15, 0.15), seed=42):
     random.seed(seed)
 
     # create folders for splits

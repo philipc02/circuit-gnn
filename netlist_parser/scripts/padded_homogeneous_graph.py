@@ -142,8 +142,16 @@ def encode_node_features(node_type, comp_type=None, pin_type=None):
     node_type_idx = NODE_TYPES.index(node_type)
 
     # component and pin types default to -1 if this is not the node type
-    comp_type_idx = COMPONENT_TYPES.index(comp_type) if (comp_type in COMPONENT_TYPES) else -1
-    pin_type_idx  = PIN_TYPES.index(pin_type) if (pin_type in PIN_TYPES) else -1
+    # ONLY set comp_type_idx for component nodes -> no subcircuit nodes!
+    if node_type == "component" and comp_type in COMPONENT_TYPES:
+        comp_type_idx = COMPONENT_TYPES.index(comp_type)
+    else:
+        comp_type_idx = -1 
+    # ONLY set pin_type_idx for pin nodes  
+    if node_type == "pin" and pin_type in PIN_TYPES:
+        pin_type_idx = PIN_TYPES.index(pin_type)
+    else:
+        pin_type_idx = -1
 
     # store indices
     return {
@@ -287,5 +295,5 @@ def sanity_check(file_path, G):
 if __name__ == "__main__":
     input_folder = "../netlists"
     output_folder = "../graphs_star_padded_homogeneous"
-    # process_folder(input_folder, output_folder)
+    process_folder(input_folder, output_folder)
     remove_duplicate_graphs(output_folder)
