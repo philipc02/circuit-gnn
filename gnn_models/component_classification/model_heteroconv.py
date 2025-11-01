@@ -7,6 +7,10 @@ import torch.nn as nn
 from torch_geometric.nn import HeteroConv, SAGEConv
 from torch_geometric.loader import DataLoader
 from sklearn.metrics import f1_score
+import datetime
+from pathlib import Path
+import json
+import pandas as pd
 
 def create_heterodata_obj():
     input_folder = "../../data/data_conventional"
@@ -48,6 +52,61 @@ def load_dataset():
         HeteroCircuitDataset("../../data/data_conventional_heterodata/val"),
         HeteroCircuitDataset("../../data/data_conventional_heterodata/test"),
     )
+
+class ExperimentTracker:
+    def __init__(self, experiment_name):
+        self.experiment_name = experiment_name
+        self.timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.experiment_dir = Path("experiments") / f"{experiment_name}_{self.timestamp}"
+        self.experiment_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.metrics = {
+            'train_loss': [], 'val_loss': [], 'val_acc': [], 'val_f1': [],
+            'test_acc': None, 'test_f1': None
+        }
+        self.config = {}
+
+    def log_params(self, param_dict):
+        # log experiment parameters
+        self.param = param_dict
+        with open(self.experiment_dir / "param.json", 'w') as f:
+            json.dump(param_dict, f, indent=2)
+
+    def log_metrics(self, epoch, train_loss, val_loss, val_acc, val_f1):
+        # log metrics for each epoch
+        self.metrics['train_loss'].append(train_loss)
+        self.metrics['val_loss'].append(val_loss)
+        self.metrics['val_acc'].append(val_acc)
+        self.metrics['val_f1'].append(val_f1)
+        
+        # save metrics to CSV after each epoch
+        metrics_df = pd.DataFrame({
+            'epoch': list(range(epoch + 1)),
+            'train_loss': self.metrics['train_loss'],
+            'val_loss': self.metrics['val_loss'], 
+            'val_acc': self.metrics['val_acc'],
+            'val_f1': self.metrics['val_f1']
+        })
+        metrics_df.to_csv(self.experiment_dir / "metrics.csv", index=False)
+
+    def log_test_results(self, test_acc, test_f1):
+        # log final test results
+        self.metrics['test_acc'] = test_acc
+        self.metrics['test_f1'] = test_f1
+        with open(self.experiment_dir / "test_results.json", 'w') as f:
+            json.dump({'test_acc': test_acc, 'test_f1': test_f1}, f, indent=2)
+
+    def save_model(self, model, name="best_model.pth"):
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'param': self.param,
+            'metrics': self.metrics
+        }, self.experiment_dir / name)
+
+    def save_training_log(self, log_text):
+        # save training log text
+        with open(self.experiment_dir / "training_log.txt", 'w') as f:
+            f.write(log_text)
 
 # class definition for HeteroConv model with GraphSAGE layers
 class HeteroSAGE(torch.nn.Module):
@@ -125,7 +184,22 @@ class HeteroSAGE(torch.nn.Module):
         # classifying into 8 component types (subcircuit excluded), the model needs to output 8 logits (raw, unnormalized output values from the final layer of a model, just before applying f.ex. softmax) per node
         return self.classifier(x_dict["component"])
     
-def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1):
+def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1, num_layers=3):
+
+    tracker = ExperimentTracker("hetero_component_classification")
+    
+    # log param configuration
+    params = {
+        'num_epochs': num_epochs,
+        'hidden_channels': hidden_channels,
+        'learning_rate': lr,
+        'batch_size': batch_size,
+        'num_layers': num_layers,
+        'num_classes': 9,
+        'weight_decay': 1e-5
+    }
+    tracker.log_params(params)
+
     train_dataset, val_dataset, test_dataset = load_dataset()
     # loads graphs in batches
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) # shuffle the order of samples at every epoch to avoid pattrern learning
@@ -134,9 +208,15 @@ def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1):
 
     num_classes = 9 # nodes can have following component_type values: (R, C, L, V, M, Q, D, I -> corresponding index) or no component type (-1)
 
-    model = HeteroSAGE(hidden_channels=hidden_channels, num_classes=num_classes)
+    model = HeteroSAGE(hidden_channels=hidden_channels, num_classes=num_classes, num_layers=num_layers)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5) # Adam -> gradient descent optimizer for model's weights (uses computed gradients)
     criterion = torch.nn.CrossEntropyLoss() # compute loss using cross entropy between predicted and desired output
+
+    # training variables
+    best_val_acc = 0
+    patience_counter = 0
+    patience = 20   # if patience counter surpasses this value we stop training as we dont see any improvement in val acc even after this many epochs
+    training_log = []
 
     for epoch in range(num_epochs):
         ## train
@@ -179,7 +259,30 @@ def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1):
         # f1 score accounts for class imbalances, micro score gives more weight to majority classes (performance on rare occurance component types is not as important)
         val_f1 = f1_score(all_labels.cpu(), all_preds.cpu(), average='micro')
 
-        print(f"Epoch {epoch:02d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f} | Val F1: {val_f1:.4f}")
+        # log metrics for each epoch
+        tracker.log_metrics(epoch, avg_train_loss, avg_val_loss, val_acc, val_f1)
+
+        # save the model with highest score currently
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            patience_counter = 0    # reset counter
+            tracker.save_model(model, "best_model.pth")
+            print(f"New best model saved with val_acc: {val_acc:.4f}")
+        else:
+            patience_counter += 1
+
+        log_line = f"Epoch {epoch:02d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f} | Val F1: {val_f1:.4f}"
+        print(log_line)
+        training_log.append(log_line)
+
+        # stop training as we dont see any improvement in val acc even after 20 epochs
+        if patience_counter >= patience:
+            print(f"Early stopping at epoch {epoch}")
+            break
+
+    # load best model for testing
+    checkpoint = torch.load(tracker.experiment_dir / "best_model.pth")
+    model.load_state_dict(checkpoint['model_state_dict'])
 
     ## test
     model.eval()
@@ -196,7 +299,12 @@ def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1):
     all_labels = torch.cat(all_labels)
     test_acc = (all_preds == all_labels).sum().item() / len(all_labels)
     test_f1 = f1_score(all_labels.cpu(), all_preds.cpu(), average='micro')
-    print(f"Test Accuracy: {test_acc:.4f} | Test F1: {test_f1:.4f}")
+    print(f"Test accuracy: {test_acc:.4f} | Test f1: {test_f1:.4f}")
+
+    # log test results and save taining log (turn list into string first)
+    tracker.log_test_results(test_acc, test_f1)
+    tracker.save_training_log("\n".join(training_log))
+
 
     return model
 
