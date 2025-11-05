@@ -181,7 +181,7 @@ class HeteroSAGE(torch.nn.Module):
                 x_dict = {k: self.dropout(x) for k, x in x_dict.items()}
 
         # return logits for component nodes only
-        # classifying into 8 component types (subcircuit excluded), the model needs to output 8 logits (raw, unnormalized output values from the final layer of a model, just before applying f.ex. softmax) per node
+        # classifying into 9 component types (subcircuit excluded), the model needs to output 9 logits (raw, unnormalized output values from the final layer of a model, just before applying f.ex. softmax) per node
         return self.classifier(x_dict["component"])
     
 def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1, num_layers=3):
