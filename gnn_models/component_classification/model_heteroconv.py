@@ -14,10 +14,11 @@ import pandas as pd
 
 def create_heterodata_obj():
     input_folder = "../../data/data_conventional"
-    output_folder = "../../data/data_conventional_heterodata"
+    output_folder = "../../data/data_conventional_heterodata"  # this will store MASKED graphs! 
 
     splits = ["train", "val", "test"]
 
+    # the splits stay unique because we are not shuffling around
     for split in splits:
         in_dir = os.path.join(input_folder, split)
         out_dir = os.path.join(output_folder, split)
@@ -28,9 +29,10 @@ def create_heterodata_obj():
                 with open(os.path.join(in_dir, fname), "rb") as f:
                     G = pickle.load(f)
 
-                data = graph_to_heterodata(G)
-                # save heterodata object into output_folder as .pt object
-                torch.save(data, os.path.join(out_dir, fname.replace(".gpickle", ".pt")))
+                data_list = graph_to_heterodata(G)  # the function returns a list of heterodata objects!
+                for i, data in enumerate(data_list):
+                    # save heterodata objects into output_folder as .pt object, name with index
+                    torch.save(data, os.path.join(out_dir, fname.replace(".gpickle", f"_masked_{i}.pt")))
 
     print("HeteroData objects were created for all graphs.\n")
 
@@ -180,9 +182,13 @@ class HeteroSAGE(torch.nn.Module):
             if i < len(self.convs) - 1:  # no dropout after last layer
                 x_dict = {k: self.dropout(x) for k, x in x_dict.items()}
 
-        # return logits for component nodes only
-        # classifying into 9 component types (subcircuit excluded), the model needs to output 9 logits (raw, unnormalized output values from the final layer of a model, just before applying f.ex. softmax) per node
-        return self.classifier(x_dict["component"])
+        # global pooling -> mean pooling to get one prediction per graph
+        component_embeddings = x_dict["component"]  # shape:[num_component_nodes, hidden_channels]
+        graph_embedding = component_embeddings.mean(dim=0, keepdim=True)  # shape:[1, hidden_channels]
+
+        # return one prediciton per graph
+        # classifying into 8 component types (subcircuit excluded), the model needs to output 8 logits (raw, unnormalized output values from the final layer of a model, just before applying f.ex. softmax) per node
+        return self.classifier(graph_embedding) # shape:[batch_size, num_classes]
     
 def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1, num_layers=3):
 
@@ -195,7 +201,7 @@ def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1, num_l
         'learning_rate': lr,
         'batch_size': batch_size,
         'num_layers': num_layers,
-        'num_classes': 9,
+        'num_classes': 8,
         'weight_decay': 1e-5
     }
     tracker.log_params(params)
@@ -206,7 +212,7 @@ def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1, num_l
     val_loader = DataLoader(val_dataset, batch_size=batch_size)
     test_loader = DataLoader(test_dataset, batch_size=batch_size)
 
-    num_classes = 9 # nodes can have following component_type values: (R, C, L, V, M, Q, D, I -> corresponding index) or no component type (-1)
+    num_classes = 8 # nodes can have following component_type values: (R, C, L, V, M, Q, D, I -> corresponding index)
 
     model = HeteroSAGE(hidden_channels=hidden_channels, num_classes=num_classes, num_layers=num_layers)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5) # Adam -> gradient descent optimizer for model's weights (uses computed gradients)
@@ -226,7 +232,8 @@ def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1, num_l
         # compute loss for each graph in train dataset and add up
         for data in train_loader:
             out = model(data.x_dict, data.edge_index_dict) # forward pass: predict from data (using HeteroSAGE forward() function defined above)
-            loss = criterion(out, data["component"].y)
+            # CrossEntropyLoss internally applies softmax and neg log likelihood to get value with highest probability from the logits
+            loss = criterion(out, data.target_comp_type)  # our desired value is component type of missinh node
 
             optimizer.zero_grad() # resets gradients from previous iteration (otherwise gradients from multiple backward passes will add up -> like this only the current gradient is used to update the weights)
             loss.backward() # compute gradients (backward pass)
@@ -244,12 +251,12 @@ def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1, num_l
         with torch.no_grad(): # tells PyTorch not to track gradients (only needed during training when we are trying to update weights)
             for data in val_loader:
                 out = model(data.x_dict, data.edge_index_dict)
-                loss = criterion(out, data["component"].y)
+                loss = criterion(out, data.target_comp_type)
                 val_loss += loss.item()
 
                 preds = out.argmax(dim=1)   # predicted component types
                 all_preds.append(preds)
-                all_labels.append(data["component"].y)  # actual component type
+                all_labels.append(data.target_comp_type)  # actual component type
 
         avg_val_loss = val_loss / len(val_loader)
         all_preds = torch.cat(all_preds)
@@ -291,9 +298,9 @@ def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1, num_l
     with torch.no_grad():
         for data in test_loader:
             out = model(data.x_dict, data.edge_index_dict)
-            preds = out.argmax(dim=1)
+            preds = out.argmax(dim=1)  # we need to manually run argmax for the evaluation (during training our loss function takes care of this)
             all_preds.append(preds)
-            all_labels.append(data["component"].y)
+            all_labels.append(data.target_comp_type)
 
     all_preds = torch.cat(all_preds)
     all_labels = torch.cat(all_labels)
