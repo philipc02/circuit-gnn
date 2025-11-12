@@ -11,6 +11,7 @@ import datetime
 from pathlib import Path
 import json
 import pandas as pd
+from torch_geometric.nn import global_mean_pool, global_max_pool
 
 def create_heterodata_obj():
     input_folder = "../../data/data_conventional"
@@ -147,7 +148,11 @@ class HeteroSAGE(torch.nn.Module):
         # self.classifier = nn.Linear(hidden_channels, num_classes)
 
         # non linear classifier to capture more complex patterns (multi layer)
+        # even more powerful classifier
         self.classifier = nn.Sequential(
+            nn.Linear(hidden_channels*2, hidden_channels),  # input dimension is 256 since we concat mean and max pooling
+            nn.ReLU(),
+            nn.Dropout(0.3),
             nn.Linear(hidden_channels, hidden_channels // 2),   # layer 1
             nn.ReLU(),  # activation
             nn.Dropout(0.2),    # regularization
@@ -155,8 +160,11 @@ class HeteroSAGE(torch.nn.Module):
         )
 
     # forward pass
-    def forward(self, x_dict, edge_index_dict): # takes node features and graph structure; x_dict and edge_index_dict are needed as they store the features for the different node and edge types
-        
+    def forward(self, data): # takes node features and graph structure; x_dict and edge_index_dict are needed as they store the features for the different node and edge types
+        x_dict = data.x_dict
+        edge_index_dict = data.edge_index_dict
+
+
         # turn the indices into embeddings
         for node_type, x in x_dict.items():
             # x has shape [num_nodes, 3] -> for each node (node_type_idx, comp_type_idx, pin_type_idx)
@@ -184,13 +192,20 @@ class HeteroSAGE(torch.nn.Module):
 
         # global pooling -> mean pooling to get one prediction per graph
         component_embeddings = x_dict["component"]  # shape:[num_component_nodes, hidden_channels]
-        graph_embedding = component_embeddings.mean(dim=0, keepdim=True)  # shape:[1, hidden_channels]
+
+        batch = data["component"].batch  
+
+        # pass on mean and max pooling for more expressiveness
+        mean_pool = global_mean_pool(component_embeddings, batch)
+        max_pool = global_max_pool(component_embeddings, batch)
+        graph_embedding = torch.cat([mean_pool, max_pool], dim=1)  # [batch_size, hidden_channels*2]
+        # graph_embedding = component_embeddings.mean(dim=0, keepdim=True)  # shape:[1, hidden_channels]
 
         # return one prediciton per graph
         # classifying into 8 component types (subcircuit excluded), the model needs to output 8 logits (raw, unnormalized output values from the final layer of a model, just before applying f.ex. softmax) per node
         return self.classifier(graph_embedding) # shape:[batch_size, num_classes]
     
-def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1, num_layers=3):
+def train_model(num_epochs=50, hidden_channels=128, lr=0.001, batch_size=32, num_layers=4):
 
     tracker = ExperimentTracker("hetero_component_classification")
     
@@ -218,6 +233,13 @@ def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1, num_l
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5) # Adam -> gradient descent optimizer for model's weights (uses computed gradients)
     criterion = torch.nn.CrossEntropyLoss() # compute loss using cross entropy between predicted and desired output
 
+    # learning rate scheduler (exponential decay)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(
+        optimizer, 
+        gamma=0.95,  # LR*0.95 each epoch
+        verbose=True
+    )
+
     # training variables
     best_val_acc = 0
     patience_counter = 0
@@ -231,7 +253,7 @@ def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1, num_l
 
         # compute loss for each graph in train dataset and add up
         for data in train_loader:
-            out = model(data.x_dict, data.edge_index_dict) # forward pass: predict from data (using HeteroSAGE forward() function defined above)
+            out = model(data) # forward pass: predict from data (using HeteroSAGE forward() function defined above)
             # CrossEntropyLoss internally applies softmax and neg log likelihood to get value with highest probability from the logits
             loss = criterion(out, data.target_comp_type)  # our desired value is component type of missinh node
 
@@ -250,7 +272,7 @@ def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1, num_l
         all_labels = []
         with torch.no_grad(): # tells PyTorch not to track gradients (only needed during training when we are trying to update weights)
             for data in val_loader:
-                out = model(data.x_dict, data.edge_index_dict)
+                out = model(data)
                 loss = criterion(out, data.target_comp_type)
                 val_loss += loss.item()
 
@@ -278,7 +300,10 @@ def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1, num_l
         else:
             patience_counter += 1
 
-        log_line = f"Epoch {epoch:02d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f} | Val F1: {val_f1:.4f}"
+        scheduler.step()  # adjust LR with exponential decay
+        current_lr = optimizer.param_groups[0]['lr']
+
+        log_line = f"Epoch {epoch:02d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f} | Val F1: {val_f1:.4f} | LR: {current_lr:.6f}"
         print(log_line)
         training_log.append(log_line)
 
@@ -297,7 +322,7 @@ def train_model(num_epochs=50, hidden_channels=64, lr=0.001, batch_size=1, num_l
     all_labels = []
     with torch.no_grad():
         for data in test_loader:
-            out = model(data.x_dict, data.edge_index_dict)
+            out = model(data)
             preds = out.argmax(dim=1)  # we need to manually run argmax for the evaluation (during training our loss function takes care of this)
             all_preds.append(preds)
             all_labels.append(data.target_comp_type)

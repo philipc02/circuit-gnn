@@ -1,0 +1,9 @@
+{
+  "num_epochs": 50,
+  "hidden_channels": 128,
+  "learning_rate": 0.001,
+  "batch_size": 32,
+  "num_layers": 3,
+  "num_classes": 8,
+  "weight_decay": 1e-05
+}
