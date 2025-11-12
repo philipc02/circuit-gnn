@@ -182,11 +182,14 @@ class HeteroSAGE(torch.nn.Module):
 
             x_dict[node_type] = x_emb # replace tuples with indices with new embedding
 
+        # NEW: skip connections
         # message passing for all layers with dropout
         for i, conv in enumerate(self.convs):
-            x_dict = conv(x_dict, edge_index_dict)
+            # x_dict = conv(x_dict, edge_index_dict)
+            sc_x_dict = conv(x_dict, edge_index_dict)
             # ReLU (Rectified Linear Unit): activation function between layers in NN -> ReLU(x) = max(0, x) (if value is positive, keep, else set to zero) => helps network learn nonlinear patterns
-            x_dict = {k: x.relu() for k, x in x_dict.items()}
+            # x_dict = {k: x.relu() for k, x in x_dict.items()}
+            x_dict = {k: (sc_x_dict[k] + x_dict[k]).relu() for k in x_dict.keys()}
             if i < len(self.convs) - 1:  # no dropout after last layer
                 x_dict = {k: self.dropout(x) for k, x in x_dict.items()}
 
