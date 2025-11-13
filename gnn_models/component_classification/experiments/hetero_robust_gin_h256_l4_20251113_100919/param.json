@@ -1,0 +1,10 @@
+{
+  "num_epochs": 80,
+  "hidden_channels": 256,
+  "learning_rate": 0.001,
+  "batch_size": 32,
+  "num_layers": 4,
+  "model_type": "gin",
+  "num_classes": 8,
+  "weight_decay": 1e-05
+}
