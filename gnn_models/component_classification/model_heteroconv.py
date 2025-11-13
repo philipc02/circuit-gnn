@@ -14,6 +14,16 @@ import json
 import pandas as pd
 from torch_geometric.nn import global_mean_pool, global_max_pool
 
+def get_device():
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+        print(f"Using GPU: {torch.cuda.get_device_name()}")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+    else:
+        device = torch.device('cpu')
+        print("Using CPU")
+    return device
+
 def create_heterodata_obj():
     input_folder = "../../data/data_conventional"
     output_folder = "../../data/data_conventional_heterodata"  # this will store MASKED graphs! 
@@ -244,6 +254,8 @@ class RobustHeteroGNN(torch.nn.Module):
 def train_robust_model(num_epochs=100, hidden_channels=256, lr=0.001, batch_size=32, 
                       num_layers=4, model_type='sage', experiment_suffix=""):
     
+    device = get_device()
+    
     experiment_name = f"hetero_robust_{model_type}_{experiment_suffix}"
     tracker = ExperimentTracker(experiment_name)
     
@@ -255,7 +267,8 @@ def train_robust_model(num_epochs=100, hidden_channels=256, lr=0.001, batch_size
         'num_layers': num_layers,
         'model_type': model_type,
         'num_classes': 8,
-        'weight_decay': 1e-5
+        'weight_decay': 1e-5,
+        'device': str(device)
     }
     tracker.log_params(params)
 
@@ -271,9 +284,9 @@ def train_robust_model(num_epochs=100, hidden_channels=256, lr=0.001, batch_size
         num_classes=num_classes, 
         num_layers=num_layers,
         model_type=model_type
-    )
+    ).to(device)
     
-    print(f"Training {model_type.upper()} model")
+    print(f"Training {model_type.upper()} model on {device}")
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
@@ -293,8 +306,12 @@ def train_robust_model(num_epochs=100, hidden_channels=256, lr=0.001, batch_size
         total_loss = 0
 
         for data in train_loader:
+            # Move data to GPU
+            data = data.to(device)
+            target = data.target_comp_type.to(device)
+            
             out = model(data)
-            loss = criterion(out, data.target_comp_type)
+            loss = criterion(out, target)
 
             optimizer.zero_grad()
             loss.backward()
@@ -313,13 +330,17 @@ def train_robust_model(num_epochs=100, hidden_channels=256, lr=0.001, batch_size
         
         with torch.no_grad():
             for data in val_loader:
+                # Move data to GPU
+                data = data.to(device)
+                target = data.target_comp_type.to(device)
+                
                 out = model(data)
-                loss = criterion(out, data.target_comp_type)
+                loss = criterion(out, target)
                 val_loss += loss.item()
 
                 preds = out.argmax(dim=1)
-                all_preds.append(preds)
-                all_labels.append(data.target_comp_type)
+                all_preds.append(preds.cpu())
+                all_labels.append(target.cpu())
 
         avg_val_loss = val_loss / len(val_loader)
         all_preds = torch.cat(all_preds)
@@ -352,16 +373,19 @@ def train_robust_model(num_epochs=100, hidden_channels=256, lr=0.001, batch_size
     # Test
     checkpoint = torch.load(tracker.experiment_dir / "best_model.pth")
     model.load_state_dict(checkpoint['model_state_dict'])
+    model.to(device)  # Ensure model is on GPU for testing
 
     model.eval()
     all_preds = []
     all_labels = []
     with torch.no_grad():
         for data in test_loader:
+            data = data.to(device)
+            target = data.target_comp_type.to(device)
             out = model(data)
             preds = out.argmax(dim=1)
-            all_preds.append(preds)
-            all_labels.append(data.target_comp_type)
+            all_preds.append(preds.cpu())
+            all_labels.append(target.cpu())
 
     all_preds = torch.cat(all_preds)
     all_labels = torch.cat(all_labels)
