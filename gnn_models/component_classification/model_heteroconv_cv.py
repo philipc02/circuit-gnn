@@ -14,7 +14,11 @@ import json
 import pandas as pd
 from torch_geometric.nn import global_mean_pool, global_max_pool
 import numpy as np
-import itertools
+# Import the required PyG classes for safe loading
+from torch_geometric.data.storage import BaseStorage
+
+# Add safe globals for PyTorch Geometric classes
+torch.serialization.add_safe_globals([BaseStorage])
 
 def get_device():
     if torch.cuda.is_available():
