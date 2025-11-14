@@ -4,7 +4,7 @@ import os
 from graph_to_heterodata_cv import graph_to_heterodata
 from torch_geometric.data import Dataset
 import torch.nn as nn
-from torch_geometric.nn import HeteroConv, SAGEConv, GINConv
+from torch_geometric.nn import HeteroConv, SAGEConv, GINConv, GCNConv
 from torch_geometric.loader import DataLoader
 import torch.nn.functional as F
 from sklearn.metrics import f1_score, classification_report, confusion_matrix
@@ -14,6 +14,7 @@ import json
 import pandas as pd
 from torch_geometric.nn import global_mean_pool, global_max_pool
 import numpy as np
+import itertools
 
 def get_device():
     if torch.cuda.is_available():
@@ -84,12 +85,10 @@ class CVExperimentTracker:
                 'labels': all_labels.tolist()
             }, f, indent=2)
         
-        # Save detailed classification report
         report = classification_report(all_labels, all_preds, output_dict=True)
         with open(self.experiment_dir / "classification_report.json", 'w') as f:
             json.dump(report, f, indent=2)
         
-        # Save confusion matrix
         cm = confusion_matrix(all_labels, all_preds)
         np.save(self.experiment_dir / "confusion_matrix.npy", cm)
         
@@ -107,13 +106,14 @@ class CVExperimentTracker:
         with open(self.experiment_dir / "training_log.txt", 'w') as f:
             f.write(log_text)
 
-# Keep your existing model classes (RobustHeteroGNN, etc.)
 class RobustHeteroGNN(torch.nn.Module):
-    def __init__(self, hidden_channels, num_classes, num_layers=3, model_type='sage'):
+    def __init__(self, hidden_channels, num_classes, num_layers=3, model_type='sage', 
+                 dropout=0.3, use_residual=False):
         super().__init__()
         self.hidden_channels = hidden_channels
         self.num_layers = num_layers
         self.model_type = model_type
+        self.use_residual = use_residual
 
         # Embedding layers
         self.node_type_emb = nn.Embedding(4, hidden_channels)
@@ -162,6 +162,15 @@ class RobustHeteroGNN(torch.nn.Module):
                             nn.Linear(hidden_channels, hidden_channels)
                         )),
                 }
+            elif model_type == 'gcn':
+                conv_dict = {
+                    ("component", "component_connection", "pin"): GCNConv(hidden_channels, hidden_channels),
+                    ("pin", "component_connection", "component"): GCNConv(hidden_channels, hidden_channels),
+                    ("subcircuit", "component_connection", "pin"): GCNConv(hidden_channels, hidden_channels),
+                    ("pin", "component_connection", "subcircuit"): GCNConv(hidden_channels, hidden_channels),
+                    ("pin", "net_connection", "net"): GCNConv(hidden_channels, hidden_channels),
+                    ("net", "net_connection", "pin"): GCNConv(hidden_channels, hidden_channels),
+                }
             else:  # SAGE 
                 conv_dict = {
                     ("component", "component_connection", "pin"): SAGEConv(hidden_channels, hidden_channels),
@@ -174,36 +183,74 @@ class RobustHeteroGNN(torch.nn.Module):
             
             self.convs.append(HeteroConv(conv_dict, aggr="sum"))
 
-        self.dropout = nn.Dropout(0.3)
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_channels * 2, hidden_channels),
+        self.dropout = nn.Dropout(dropout)
+        
+        # Classifier with flexible architecture
+        classifier_layers = []
+        in_features = hidden_channels * 2  # mean + max pool
+        
+        # First layer
+        classifier_layers.extend([
+            nn.Linear(in_features, hidden_channels),
             nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(hidden_channels, hidden_channels // 2),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(hidden_channels // 2, num_classes)
-        )
+            nn.Dropout(dropout)
+        ])
+        
+        # Optional second layer for larger networks
+        if hidden_channels >= 128:
+            classifier_layers.extend([
+                nn.Linear(hidden_channels, hidden_channels // 2),
+                nn.ReLU(),
+                nn.Dropout(dropout * 0.7)  # Slightly less dropout
+            ])
+            final_in = hidden_channels // 2
+        else:
+            final_in = hidden_channels
+            
+        classifier_layers.append(nn.Linear(final_in, num_classes))
+        
+        self.classifier = nn.Sequential(*classifier_layers)
 
     def forward(self, data):
         x_dict = data.x_dict
         edge_index_dict = data.edge_index_dict
 
-        for node_type, x in x_dict.items():
-            nt = x[:, 0]
-            if node_type == "component":
-                ct = torch.zeros_like(nt)
-                pt = x[:, 2].clamp(min=0)
-            else:
-                ct = x[:, 1].clamp(min=0)
-                pt = x[:, 2].clamp(min=0)
+        # Store initial embeddings for residual connections
+        if self.use_residual:
+            initial_embeddings = {}
+            for node_type, x in x_dict.items():
+                nt = x[:, 0]
+                if node_type == "component":
+                    ct = torch.zeros_like(nt)
+                    pt = x[:, 2].clamp(min=0)
+                else:
+                    ct = x[:, 1].clamp(min=0)
+                    pt = x[:, 2].clamp(min=0)
 
-            x_emb = self.node_type_emb(nt) + self.comp_type_emb(ct) + self.pin_type_emb(pt)
-            x_dict[node_type] = x_emb
+                x_emb = self.node_type_emb(nt) + self.comp_type_emb(ct) + self.pin_type_emb(pt)
+                initial_embeddings[node_type] = x_emb
+                x_dict[node_type] = x_emb
+        else:
+            for node_type, x in x_dict.items():
+                nt = x[:, 0]
+                if node_type == "component":
+                    ct = torch.zeros_like(nt)
+                    pt = x[:, 2].clamp(min=0)
+                else:
+                    ct = x[:, 1].clamp(min=0)
+                    pt = x[:, 2].clamp(min=0)
+
+                x_emb = self.node_type_emb(nt) + self.comp_type_emb(ct) + self.pin_type_emb(pt)
+                x_dict[node_type] = x_emb
 
         for i, conv in enumerate(self.convs):
-            x_dict = conv(x_dict, edge_index_dict)
-            x_dict = {k: F.relu(x) for k, x in x_dict.items()}
+            x_dict_new = conv(x_dict, edge_index_dict)
+            
+            # Apply residual connection if enabled
+            if self.use_residual and i == 0:
+                x_dict_new = {k: x + initial_embeddings.get(k, 0) for k, x in x_dict_new.items()}
+            
+            x_dict = {k: F.relu(x) for k, x in x_dict_new.items()}
             if i < len(self.convs) - 1:
                 x_dict = {k: self.dropout(x) for k, x in x_dict.items()}
 
@@ -219,7 +266,19 @@ class RobustHeteroGNN(torch.nn.Module):
 def train_fold(fold_idx, config, base_data_folder="../../data/data_cross_validation_heterodata"):
     device = get_device()
     
-    experiment_name = f"cv_{config['model_type']}_{config['hidden_channels']}"
+    # Create experiment name from config
+    exp_name_parts = [
+        config['model_type'],
+        f"h{config['hidden_channels']}",
+        f"l{config['num_layers']}",
+        f"d{config.get('dropout', 0.3)}",
+        f"bs{config.get('batch_size', 32)}",
+        f"lr{config.get('lr', 0.001)}",
+    ]
+    if config.get('use_residual', False):
+        exp_name_parts.append("res")
+    
+    experiment_name = "_".join(exp_name_parts)
     tracker = CVExperimentTracker(experiment_name, fold_idx)
     
     params = {
@@ -227,6 +286,8 @@ def train_fold(fold_idx, config, base_data_folder="../../data/data_cross_validat
         'model_type': config['model_type'],
         'hidden_channels': config['hidden_channels'],
         'num_layers': config['num_layers'],
+        'dropout': config.get('dropout', 0.3),
+        'use_residual': config.get('use_residual', False),
         'learning_rate': config.get('lr', 0.001),
         'batch_size': config.get('batch_size', 32),
         'num_epochs': config.get('num_epochs', 100),
@@ -250,11 +311,14 @@ def train_fold(fold_idx, config, base_data_folder="../../data/data_cross_validat
         hidden_channels=config['hidden_channels'], 
         num_classes=8, 
         num_layers=config['num_layers'],
-        model_type=config['model_type']
+        model_type=config['model_type'],
+        dropout=config.get('dropout', 0.3),
+        use_residual=config.get('use_residual', False)
     ).to(device)
     
     print(f"Fold {fold_idx} - Training {config['model_type'].upper()} model")
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"Config: {config}")
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.get('lr', 0.001), weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.8)
@@ -325,7 +389,8 @@ def train_fold(fold_idx, config, base_data_folder="../../data/data_cross_validat
         current_lr = optimizer.param_groups[0]['lr']
 
         log_line = f"Fold {fold_idx} | Epoch {epoch:03d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f} | Val F1: {val_f1:.4f} | LR: {current_lr:.6f}"
-        print(log_line)
+        if epoch % 10 == 0:
+            print(log_line)
         training_log.append(log_line)
 
         if patience_counter >= patience:
@@ -359,34 +424,82 @@ def train_fold(fold_idx, config, base_data_folder="../../data/data_cross_validat
 
     return test_acc, test_f1, all_preds, all_labels
 
-def run_cross_validation():
-    """Run 5-fold cross-validation"""
-    configurations = [
-        {'model_type': 'gin', 'hidden_channels': 256, 'num_layers': 4, 'lr': 0.001, 'batch_size': 32},
-        {'model_type': 'sage', 'hidden_channels': 256, 'num_layers': 4, 'lr': 0.001, 'batch_size': 32},
-    ]
+def generate_hyperparameter_configs():
+    base_configs = []
     
-    cv_results = {}
+    # model types
+    model_types = ['sage', 'gin', 'gcn']
     
-    for config in configurations:
+    # smaller networks
+    hidden_channels_options = [64, 128, 256]
+    num_layers_options = [2, 3, 4]  # fewer layers
+    
+    # dropout rates
+    dropout_options = [0.2, 0.3, 0.4]
+    
+    # batch sizes
+    batch_size_options = [16, 32, 64]
+    
+    # learning rates
+    lr_options = [0.001, 0.0005]
+    
+    # residual connections
+    residual_options = [False, True]
+    
+    # different combinations
+    for model_type in model_types:
+        for hidden_channels in hidden_channels_options:
+            for num_layers in num_layers_options:
+                # skip too complex combinations for now as we have small graphs (expecting not much improvement)
+                if hidden_channels >= 256 and num_layers >= 4:
+                    continue
+                    
+                for dropout in dropout_options:
+                    for batch_size in batch_size_options:
+                        for lr in lr_options:
+                            for use_residual in residual_options:
+                                config = {
+                                    'model_type': model_type,
+                                    'hidden_channels': hidden_channels,
+                                    'num_layers': num_layers,
+                                    'dropout': dropout,
+                                    'batch_size': batch_size,
+                                    'lr': lr,
+                                    'use_residual': use_residual,
+                                    'num_epochs': 100
+                                }
+                                base_configs.append(config)
+    
+    # sort by model complexity (simpler first)
+    base_configs.sort(key=lambda x: (x['hidden_channels'], x['num_layers']))
+    
+    return base_configs[:20]  # limit to top 20
+
+def run_hyperparameter_search():
+    configs = generate_hyperparameter_configs()
+    
+    print(f"Generated {len(configs)} hyperparam configs")
+    print("Starting model training with generated hyperparam configs...")
+    
+    results = {}
+    
+    for i, config in enumerate(configs):
         print(f"\n{'='*60}")
-        print(f"Starting 5-Fold Cross-Validation for {config['model_type'].upper()}")
+        print(f"Configuration {i+1}/{len(configs)}")
+        print(f"Model: {config['model_type']}, Hidden: {config['hidden_channels']}, "
+              f"Layers: {config['num_layers']}, Dropout: {config['dropout']}, "
+              f"Residual: {config['use_residual']}, BS: {config['batch_size']}, LR: {config['lr']}")
         print(f"{'='*60}")
         
         fold_accuracies = []
         fold_f1_scores = []
-        all_predictions = []
-        all_labels = []
         
         for fold_idx in range(5):
             print(f"\n--- Fold {fold_idx} ---")
             try:
-                test_acc, test_f1, preds, labels = train_fold(fold_idx, config)
+                test_acc, test_f1, _, _ = train_fold(fold_idx, config)
                 fold_accuracies.append(test_acc)
                 fold_f1_scores.append(test_f1)
-                all_predictions.extend(preds.tolist())
-                all_labels.extend(labels.tolist())
-                
                 print(f"Fold {fold_idx} completed: Acc={test_acc:.4f}, F1={test_f1:.4f}")
                 
             except Exception as e:
@@ -400,43 +513,81 @@ def run_cross_validation():
         mean_f1 = np.mean(fold_f1_scores)
         std_f1 = np.std(fold_f1_scores)
         
-        cv_results[config['model_type']] = {
+        config_key = f"config_{i+1:02d}"
+        results[config_key] = {
+            'config': config,
             'fold_accuracies': fold_accuracies,
             'fold_f1_scores': fold_f1_scores,
             'mean_accuracy': mean_acc,
             'std_accuracy': std_acc,
             'mean_f1': mean_f1,
-            'std_f1': std_f1,
-            'all_predictions': all_predictions,
-            'all_labels': all_labels
+            'std_f1': std_f1
         }
         
-        print(f"\n{config['model_type'].upper()} Cross-Validation Results:")
-        print(f"Mean Accuracy: {mean_acc:.4f} ± {std_acc:.4f}")
+        print(f"\nResults for {config_key}:")
+        print(f"Mean Accuracy: {mean_acc:.4f} ± {std_acc:.4f}")  # standard deviation
         print(f"Mean F1-Score: {mean_f1:.4f} ± {std_f1:.4f}")
         print(f"Fold Accuracies: {[f'{acc:.4f}' for acc in fold_accuracies]}")
-        print(f"Fold F1-Scores: {[f'{f1:.4f}' for f1 in fold_f1_scores]}")
     
-    # Save overall results
-    results_dir = Path("cv_experiments") / "cross_validation_results"
+    # Save results and find best configuration
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_dir = Path("hyperparameter_search") / f"search_results_{timestamp}"
     results_dir.mkdir(parents=True, exist_ok=True)
     
-    with open(results_dir / "cv_results.json", 'w') as f:
-        json.dump(cv_results, f, indent=2)
+    with open(results_dir / "hyperparameter_results.json", 'w') as f:
+        json.dump(results, f, indent=2)
     
-    # Print summary
+    # Find best configuration
+    best_config_key = max(results.keys(), key=lambda x: results[x]['mean_accuracy'])
+    best_result = results[best_config_key]
+    
     print(f"\n{'='*60}")
-    print("CROSS-VALIDATION SUMMARY")
+    print("HYPERPARAMETER SEARCH SUMMARY")
     print(f"{'='*60}")
-    for model_type, results in cv_results.items():
-        print(f"{model_type.upper()}: {results['mean_accuracy']:.4f} ± {results['std_accuracy']:.4f}")
+    print(f"BEST CONFIGURATION: {best_config_key}")
+    print(f"Best Accuracy: {best_result['mean_accuracy']:.4f} ± {best_result['std_accuracy']:.4f}")
+    print(f"Best F1-Score: {best_result['mean_f1']:.4f} ± {best_result['std_f1']:.4f}")
+    print(f"Configuration: {best_result['config']}")
     
-    best_model = max(cv_results.keys(), key=lambda x: cv_results[x]['mean_accuracy'])
-    best_acc = cv_results[best_model]['mean_accuracy']
-    print(f"\nBEST MODEL: {best_model.upper()} with mean accuracy {best_acc:.4f}")
+    # Save best configuration separately
+    with open(results_dir / "best_configuration.json", 'w') as f:
+        json.dump({
+            'config_key': best_config_key,
+            'config': best_result['config'],
+            'mean_accuracy': best_result['mean_accuracy'],
+            'std_accuracy': best_result['std_accuracy'],
+            'mean_f1': best_result['mean_f1'],
+            'std_f1': best_result['std_f1']
+        }, f, indent=2)
     
-    return cv_results
+    # Create results summary table
+    summary_data = []
+    for config_key, result in results.items():
+        summary_data.append({
+            'config_key': config_key,
+            'model_type': result['config']['model_type'],
+            'hidden_channels': result['config']['hidden_channels'],
+            'num_layers': result['config']['num_layers'],
+            'dropout': result['config']['dropout'],
+            'use_residual': result['config']['use_residual'],
+            'batch_size': result['config']['batch_size'],
+            'lr': result['config']['lr'],
+            'mean_accuracy': result['mean_accuracy'],
+            'std_accuracy': result['std_accuracy'],
+            'mean_f1': result['mean_f1'],
+            'std_f1': result['std_f1']
+        })
+    
+    summary_df = pd.DataFrame(summary_data)
+    summary_df = summary_df.sort_values('mean_accuracy', ascending=False)
+    summary_df.to_csv(results_dir / "results_summary.csv", index=False)
+    
+    print(f"\nResults saved to: {results_dir}")
+    print(f"Top 5 configurations:")
+    print(summary_df.head(5)[['config_key', 'model_type', 'hidden_channels', 'num_layers', 'mean_accuracy', 'std_accuracy']])
+    
+    return results, best_result
 
 if __name__ == "__main__":
-    print("Starting 5-Fold Cross-Validation...")
-    cv_results = run_cross_validation()
+    print("Starting Hyperparameter Search...")
+    results, best_result = run_hyperparameter_search()
