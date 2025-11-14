@@ -14,11 +14,6 @@ import json
 import pandas as pd
 from torch_geometric.nn import global_mean_pool, global_max_pool
 import numpy as np
-# Import the required PyG classes for safe loading
-from torch_geometric.data.storage import BaseStorage
-
-# Add safe globals for PyTorch Geometric classes
-torch.serialization.add_safe_globals([BaseStorage])
 
 def get_device():
     if torch.cuda.is_available():
@@ -39,7 +34,7 @@ class CrossValidationDataset(Dataset):
         return len(self.files)
     
     def __getitem__(self, idx):
-        return torch.load(os.path.join(self.folder, self.files[idx]), weights_only=True)
+        return torch.load(os.path.join(self.folder, self.files[idx]), weights_only=False)
 
 class CVExperimentTracker:
     def __init__(self, experiment_name, fold_idx):
@@ -402,7 +397,7 @@ def train_fold(fold_idx, config, base_data_folder="../../data/data_cross_validat
             break
 
     # Test
-    checkpoint = torch.load(tracker.experiment_dir / "best_model.pth", weights_only=True)
+    checkpoint = torch.load(tracker.experiment_dir / "best_model.pth", weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(device)
 
