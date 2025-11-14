@@ -1,5 +1,6 @@
 venv/
 .env/
 **/venv/
+**/gnn-env/
 **/.env/
 **/__pycache__

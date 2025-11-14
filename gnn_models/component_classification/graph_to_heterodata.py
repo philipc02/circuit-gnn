@@ -70,8 +70,8 @@ def graph_to_heterodata(G: nx.Graph, num_masks=4) -> HeteroData:
         for u, v, eattr in graph.edges(data=True):
             # to create tuple containing information on edge
             etype = eattr["kind"]
-            src_type = G.nodes[u]["type"]
-            dst_type = G.nodes[v]["type"]
+            src_type = graph.nodes[u]["type"]
+            dst_type = graph.nodes[v]["type"]
             edge_type = (src_type, etype, dst_type)
             rev_edge_type = (dst_type, etype, src_type)
 
