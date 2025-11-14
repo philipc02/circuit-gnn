@@ -1,0 +1,11 @@
+{
+  "fold_idx": 0,
+  "model_type": "sage",
+  "hidden_channels": 256,
+  "num_layers": 4,
+  "learning_rate": 0.001,
+  "batch_size": 32,
+  "num_epochs": 100,
+  "num_classes": 8,
+  "device": "cuda"
+}
