@@ -35,7 +35,7 @@ class CrossValidationDataset(Dataset):
         return len(self.files)
     
     def __getitem__(self, idx):
-        return torch.load(os.path.join(self.folder, self.files[idx]))
+        return torch.load(os.path.join(self.folder, self.files[idx]), weights_only=True)
 
 class CVExperimentTracker:
     def __init__(self, experiment_name, fold_idx):
@@ -398,7 +398,7 @@ def train_fold(fold_idx, config, base_data_folder="../../data/data_cross_validat
             break
 
     # Test
-    checkpoint = torch.load(tracker.experiment_dir / "best_model.pth")
+    checkpoint = torch.load(tracker.experiment_dir / "best_model.pth", weights_only=True)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(device)
 
