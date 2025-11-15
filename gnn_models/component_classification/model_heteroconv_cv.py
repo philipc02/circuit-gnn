@@ -14,6 +14,7 @@ import json
 import pandas as pd
 from torch_geometric.nn import global_mean_pool, global_max_pool
 import numpy as np
+import random
 
 def get_device():
     if torch.cuda.is_available():
@@ -426,53 +427,120 @@ def train_fold(fold_idx, config, base_data_folder="../../data/data_cross_validat
 def generate_hyperparameter_configs():
     base_configs = []
     
-    # model types
-    model_types = ['sage', 'gin', 'gcn']
+    # to test different complexities
+    architecture_families = [
+        # simple
+        {
+            'model_types': ['sage', 'gin', 'gcn'],
+            'hidden_channels': [64, 128],
+            'num_layers': [2, 3],
+            'dropout': [0.2, 0.3],
+            'batch_size': [16, 32],
+            'lr': [0.001, 0.0005],
+            'use_residual': [False, True],
+            'count': 8  # num configs from this family
+        },
+        # medium
+        {
+            'model_types': ['sage', 'gin', 'gcn'],
+            'hidden_channels': [128, 256],
+            'num_layers': [3, 4],
+            'dropout': [0.3, 0.4],
+            'batch_size': [16, 32, 64],
+            'lr': [0.001, 0.0005, 0.0001],
+            'use_residual': [False, True],
+            'count': 10
+        },
+        # complex
+        {
+            'model_types': ['sage', 'gin', 'gcn'],
+            'hidden_channels': [256, 512],
+            'num_layers': [4, 5],
+            'dropout': [0.4, 0.5],
+            'batch_size': [32, 64],
+            'lr': [0.0005, 0.0001],
+            'use_residual': [True],  # residual might help with deeper networks
+            'count': 8
+        },
+        # some GIN models
+        {
+            'model_types': ['gin'], 
+            'hidden_channels': [128, 256],
+            'num_layers': [3, 4],
+            'dropout': [0.3, 0.4],
+            'batch_size': [16, 32],
+            'lr': [0.001, 0.0005],
+            'use_residual': [True],
+            'count': 4
+        }
+    ]
     
-    # smaller networks
-    hidden_channels_options = [64, 128, 256]
-    num_layers_options = [2, 3, 4]  # fewer layers
+    # configs for each family
+    for family in architecture_families:
+        family_configs = []
+        
+        for model_type in family['model_types']:
+            for hidden_channels in family['hidden_channels']:
+                for num_layers in family['num_layers']:
+                    for dropout in family['dropout']:
+                        for batch_size in family['batch_size']:
+                            for lr in family['lr']:
+                                for use_residual in family['use_residual']:
+                                    config = {
+                                        'model_type': model_type,
+                                        'hidden_channels': hidden_channels,
+                                        'num_layers': num_layers,
+                                        'dropout': dropout,
+                                        'batch_size': batch_size,
+                                        'lr': lr,
+                                        'use_residual': use_residual,
+                                        'num_epochs': 100
+                                    }
+                                    family_configs.append(config)
+        
+        # randomly sample from family
+        if len(family_configs) > family['count']:
+            family_configs = random.sample(family_configs, family['count'])
+        base_configs.extend(family_configs)
     
-    # dropout rates
-    dropout_options = [0.2, 0.3, 0.4]
+    # some other interesting configs
+    other_configs = [
+        # complex GIN
+        {'model_type': 'gin', 'hidden_channels': 512, 'num_layers': 4, 'dropout': 0.5, 
+         'batch_size': 32, 'lr': 0.0005, 'use_residual': True, 'num_epochs': 100},
+        # deep SAGE
+        {'model_type': 'sage', 'hidden_channels': 256, 'num_layers': 5, 'dropout': 0.4,
+         'batch_size': 16, 'lr': 0.0005, 'use_residual': True, 'num_epochs': 100},
+        # medium GCN
+        {'model_type': 'gcn', 'hidden_channels': 256, 'num_layers': 3, 'dropout': 0.3,
+         'batch_size': 32, 'lr': 0.001, 'use_residual': False, 'num_epochs': 100},
+        # simple but with high LR
+        {'model_type': 'sage', 'hidden_channels': 64, 'num_layers': 2, 'dropout': 0.2,
+         'batch_size': 64, 'lr': 0.005, 'use_residual': False, 'num_epochs': 100},
+    ]
     
-    # batch sizes
-    batch_size_options = [16, 32, 64]
+    base_configs.extend(other_configs)
     
-    # learning rates
-    lr_options = [0.001, 0.0005]
+    # remove duplicates
+    unique_configs = []
+    seen = set()
+    for config in base_configs:
+        config_key = tuple(sorted(config.items()))
+        if config_key not in seen:
+            seen.add(config_key)
+            unique_configs.append(config)
     
-    # residual connections
-    residual_options = [False, True]
+    print(f"Generated {len(unique_configs)} unique configs")
+    print("Config breakdown:")
+    model_counts = {}
+    for config in unique_configs:
+        model_type = config['model_type']
+        model_counts[model_type] = model_counts.get(model_type, 0) + 1
     
-    # different combinations
-    for model_type in model_types:
-        for hidden_channels in hidden_channels_options:
-            for num_layers in num_layers_options:
-                # skip too complex combinations for now as we have small graphs (expecting not much improvement)
-                if hidden_channels >= 256 and num_layers >= 4:
-                    continue
-                    
-                for dropout in dropout_options:
-                    for batch_size in batch_size_options:
-                        for lr in lr_options:
-                            for use_residual in residual_options:
-                                config = {
-                                    'model_type': model_type,
-                                    'hidden_channels': hidden_channels,
-                                    'num_layers': num_layers,
-                                    'dropout': dropout,
-                                    'batch_size': batch_size,
-                                    'lr': lr,
-                                    'use_residual': use_residual,
-                                    'num_epochs': 100
-                                }
-                                base_configs.append(config)
+    for model_type, count in model_counts.items():
+        print(f"  {model_type.upper()}: {count} configs")
     
-    # sort by model complexity (simpler first)
-    base_configs.sort(key=lambda x: (x['hidden_channels'], x['num_layers']))
-    
-    return base_configs[:20]  # limit to top 20
+    return unique_configs
 
 def run_hyperparameter_search():
     configs = generate_hyperparameter_configs()
@@ -582,8 +650,16 @@ def run_hyperparameter_search():
     summary_df.to_csv(results_dir / "results_summary.csv", index=False)
     
     print(f"\nResults saved to: {results_dir}")
-    print(f"Top 5 configurations:")
-    print(summary_df.head(5)[['config_key', 'model_type', 'hidden_channels', 'num_layers', 'mean_accuracy', 'std_accuracy']])
+    print(f"Top 10 configurations:")
+    print(summary_df.head(10)[['config_key', 'model_type', 'hidden_channels', 'num_layers', 
+                              'mean_accuracy', 'std_accuracy']])
+    
+    print(f"\nPerformance by Model Type:")
+    model_performance = summary_df.groupby('model_type').agg({
+        'mean_accuracy': ['mean', 'max'],
+        'std_accuracy': 'mean'
+    }).round(4)
+    print(model_performance)
     
     return results, best_result
 
