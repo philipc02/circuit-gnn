@@ -1,0 +1,17 @@
+{
+  "config_key": "config_01",
+  "config": {
+    "model_type": "sage",
+    "hidden_channels": 64,
+    "num_layers": 2,
+    "dropout": 0.2,
+    "batch_size": 16,
+    "lr": 0.001,
+    "use_residual": false,
+    "num_epochs": 100
+  },
+  "mean_accuracy": 0.0,
+  "std_accuracy": 0.0,
+  "mean_f1": 0.0,
+  "std_f1": 0.0
+}
