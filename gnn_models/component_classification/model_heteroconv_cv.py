@@ -164,12 +164,12 @@ class RobustHeteroGNN(torch.nn.Module):
                 }
             elif model_type == 'gcn':
                 conv_dict = {
-                    ("component", "component_connection", "pin"): GCNConv(hidden_channels, hidden_channels),
-                    ("pin", "component_connection", "component"): GCNConv(hidden_channels, hidden_channels),
-                    ("subcircuit", "component_connection", "pin"): GCNConv(hidden_channels, hidden_channels),
-                    ("pin", "component_connection", "subcircuit"): GCNConv(hidden_channels, hidden_channels),
-                    ("pin", "net_connection", "net"): GCNConv(hidden_channels, hidden_channels),
-                    ("net", "net_connection", "pin"): GCNConv(hidden_channels, hidden_channels),
+                    ("component", "component_connection", "pin"): GCNConv(hidden_channels, hidden_channels, add_self_loops=False),
+                    ("pin", "component_connection", "component"): GCNConv(hidden_channels, hidden_channels, add_self_loops=False),
+                    ("subcircuit", "component_connection", "pin"): GCNConv(hidden_channels, hidden_channels, add_self_loops=False),
+                    ("pin", "component_connection", "subcircuit"): GCNConv(hidden_channels, hidden_channels, add_self_loops=False),
+                    ("pin", "net_connection", "net"): GCNConv(hidden_channels, hidden_channels, add_self_loops=False),
+                    ("net", "net_connection", "pin"): GCNConv(hidden_channels, hidden_channels, add_self_loops=False),
                 }
             else:  # SAGE 
                 conv_dict = {
