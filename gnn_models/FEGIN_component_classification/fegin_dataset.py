@@ -242,7 +242,6 @@ class FEGINDatasetFiltered(Dataset):
 
 def collate_fegin(batch):
     """Custom collate function that handles graph descriptors correctly."""
-    print("collate_fegin called for batch of length:", len(batch))
     # Remove None samples
     batch = [item for item in batch if item is not None]
     if len(batch) == 0:
@@ -267,8 +266,6 @@ def collate_fegin(batch):
     # --- 3) Re-insert descriptors as a (batch_size, descriptor_dim) tensor ---
     if len(descriptors) > 0:
         batched_data.graph_descriptor = torch.stack(descriptors, dim=0)
-
-    print("BATCH DESCRIPTOR SHAPE:", batched_data.graph_descriptor.shape)
 
 
     return batched_data

@@ -174,8 +174,6 @@ class FEGIN(nn.Module):
         Returns:
             logits: Class logits [batch_size, num_classes]
         """
-        print(">>> descriptor entering MLP:", data.graph_descriptor.shape)
-
         # GNN encoding
         gnn_embedding = self.gnn_encoder(data.x, data.edge_index, data.batch)
         
