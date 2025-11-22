@@ -381,15 +381,15 @@ def run_cross_validation(config, representation='star'):
 
 if __name__ == "__main__":
     config = {
-        'hidden_channels': 128,
-        'num_layers': 3,
+        'hidden_channels': 32,
+        'num_layers': 4,
         'gnn_type': 'gin',
         'dropout': 0.3,
-        'batch_size': 32,
+        'batch_size': 128,
         'lr': 0.001,
         'weight_decay': 1e-5,
         'num_epochs': 100,
-        'patience': 30,
+        'patience': 100,
         'use_descriptors': True
     }
     
