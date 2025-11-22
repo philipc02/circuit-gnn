@@ -1,10 +1,3 @@
-"""
-FEGIN: Feature Extraction with GNN + Descriptors
-Based on Anwar Said et al. "Circuit design completion using graph neural networks"
-
-Updated to match baseline methodology while using modern PyTorch Geometric.
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,10 +7,6 @@ from graph_descriptors import get_descriptor_dimension
 
 
 class GNNEncoder(nn.Module):
-    """
-    GNN encoder for learning node/graph representations.
-    Supports GIN, GAT, GCN, GraphSAGE.
-    """
     
     def __init__(self, hidden_channels, num_layers=3, gnn_type='gin', 
                  dropout=0.3, num_node_features=3):
@@ -64,15 +53,6 @@ class GNNEncoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
     
     def forward(self, x, edge_index, batch):
-        """
-        Args:
-            x: Node features [num_nodes, 3] (indices)
-            edge_index: Edge indices [2, num_edges]
-            batch: Batch assignment [num_nodes]
-        
-        Returns:
-            graph_embedding: Graph-level embedding [batch_size, hidden_channels]
-        """
         # Embed discrete features
         node_type_idx = x[:, 0].clamp(min=0)
         comp_type_idx = x[:, 1].clamp(min=0)
@@ -110,19 +90,9 @@ class GNNEncoder(nn.Module):
 
 
 class FEGIN(nn.Module):
-    """
-    FEGIN: Feature Extraction with GNN + Graph Descriptors.
-    
-    Combines:
-    1. GNN-based node representation learning
-    2. Global graph descriptors (NetLSD + DGSD + statistics)
-    3. Fusion layer for final classification
-    
-    Updated for 4-class problem: R, C, V, X
-    """
-    
     def __init__(self, hidden_channels, num_classes=4, num_layers=3, 
-                 gnn_type='gin', dropout=0.3, descriptor_dim=1184, use_descriptors=True):
+                 gnn_type='gin', dropout=0.3, n_eigenvalues=10,
+                 dgsd_bins=10, use_dgsd=True, use_descriptors=True):
         super().__init__()
         
         self.use_descriptors = use_descriptors
@@ -134,7 +104,11 @@ class FEGIN(nn.Module):
             gnn_type=gnn_type,
             dropout=dropout
         )
-        
+        # Graph descriptor dimension (with DGSD support)
+        descriptor_dim = get_descriptor_dimension(
+            n_eigenvalues, dgsd_bins, use_dgsd
+        ) if use_descriptors else 0
+
         # GNN produces 3 * hidden_channels (mean + max + sum pooling)
         gnn_output_dim = hidden_channels * 3
         
@@ -165,15 +139,6 @@ class FEGIN(nn.Module):
         self.classifier = nn.Linear(hidden_channels, num_classes)
     
     def forward(self, data):
-        """
-        Forward pass.
-        
-        Args:
-            data: PyG Data batch with x, edge_index, batch, graph_descriptor
-        
-        Returns:
-            logits: Class logits [batch_size, num_classes]
-        """
         # GNN encoding
         gnn_embedding = self.gnn_encoder(data.x, data.edge_index, data.batch)
         
@@ -193,10 +158,6 @@ class FEGIN(nn.Module):
 
 
 class BaselineGNN(nn.Module):
-    """
-    Baseline GNN without graph descriptors.
-    For ablation studies.
-    """
     
     def __init__(self, hidden_channels, num_classes=8, num_layers=3,
                  gnn_type='gin', dropout=0.3):
@@ -228,7 +189,6 @@ class BaselineGNN(nn.Module):
 
 
 def count_parameters(model):
-    """Count trainable parameters in model."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
@@ -256,9 +216,7 @@ if __name__ == "__main__":
     print(f"Batch: {batch.num_graphs} graphs, {batch.num_nodes} total nodes")
     
     # Test FEGIN
-    print("\n" + "="*60)
     print("FEGIN Model (with descriptors)")
-    print("="*60)
     
     model_fegin = FEGIN(
         hidden_channels=128,
@@ -275,9 +233,7 @@ if __name__ == "__main__":
     print(f"Output (first graph): {output[0]}")
     
     # Test Baseline GNN
-    print("\n" + "="*60)
     print("Baseline GNN (without descriptors)")
-    print("="*60)
     
     model_baseline = BaselineGNN(
         hidden_channels=128,
@@ -292,15 +248,11 @@ if __name__ == "__main__":
     print(f"Output shape: {output.shape}")
     
     # Test different GNN types
-    print("\n" + "="*60)
     print("Different GNN Types")
-    print("="*60)
     
     for gnn_type in ['gin', 'gat', 'gcn', 'sage']:
         model = FEGIN(hidden_channels=64, gnn_type=gnn_type)
         output = model(batch)
         print(f"{gnn_type.upper():6s}: {count_parameters(model):>7,} params, output shape {output.shape}")
     
-    print("\n" + "="*60)
     print("FEGIN model ready for training!")
-    print("="*60)

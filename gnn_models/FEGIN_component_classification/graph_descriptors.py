@@ -1,8 +1,3 @@
-"""
-Graph descriptors for FEGIN model.
-Based on Anwar Said et al. "Circuit design completion using graph neural networks"
-"""
-
 import torch
 import numpy as np
 import networkx as nx

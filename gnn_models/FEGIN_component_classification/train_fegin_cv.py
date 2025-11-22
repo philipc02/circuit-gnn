@@ -182,15 +182,6 @@ def train_fold(fold_idx, config, representation='star',
     )
     
     print(f"Train: {len(train_dataset)}, Val: {len(val_dataset)}, Test: {len(test_dataset)}")
-
-    # Debug: Check descriptor dimensions across multiple samples
-    print("\n=== Descriptor Dimension Debug ===")
-    for i in range(min(3, len(train_dataset))):
-        sample = train_dataset[i]
-        if sample is not None and hasattr(sample, 'graph_descriptor'):
-            print(f"Sample {i}: descriptor shape = {sample.graph_descriptor.shape}")
-            print(f"Sample {i}: descriptor dim = {sample.graph_descriptor.shape[0]}")
-    print("=== End Debug ===\n")
     
     # class weights
     class_weights = compute_class_weights(train_dataset, device)
@@ -218,30 +209,16 @@ def train_fold(fold_idx, config, representation='star',
     
     # Create model
     if config.get('use_descriptors', True):
-        sample_data = train_dataset[0]
-        if sample_data is not None and hasattr(sample_data, 'graph_descriptor'):
-            # Get the actual descriptor dimension from the computed descriptors
-            actual_descriptor_dim = int(sample_data.graph_descriptor.shape[0])
-            print(f"Actual descriptor dimension: {actual_descriptor_dim}")
-            
-            # Debug: Check what the descriptor looks like
-            print("Raw descriptor from dataset:", sample_data.graph_descriptor.shape)
-            print("Descriptor values:", sample_data.graph_descriptor)
-        else:
-            # Use the expected dimension from graph_descriptors.py
-            from graph_descriptors import get_descriptor_dimension
-            actual_descriptor_dim = get_descriptor_dimension()
-            print(f"Using expected descriptor dimension: {actual_descriptor_dim}")
-        print("Raw descriptor from dataset:", train_dataset[0].graph_descriptor.shape)
-        print(train_dataset[0].graph_descriptor)
         model = FEGIN(
             hidden_channels=config['hidden_channels'],
             num_classes=len(COMPONENT_TYPES),
             num_layers=config['num_layers'],
             gnn_type=config['gnn_type'],
             dropout=config['dropout'],
-            use_descriptors=True,
-            descriptor_dim=actual_descriptor_dim
+            n_eigenvalues=config.get('n_eigenvalues', 10),
+            dgsd_bins=config.get('dgsd_bins', 10),
+            use_dgsd=config.get('use_dgsd', True),
+            use_descriptors=True
         ).to(device)
     else:
         model = BaselineGNN(
