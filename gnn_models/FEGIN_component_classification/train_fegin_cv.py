@@ -36,13 +36,30 @@ def compute_class_weights(dataset, device):
     V    :   305 ( 16.4%)
     X    :   248 ( 11.8%)
     '''
-    # Counts from analysis
-    counts = np.array([845, 706, 305, 248])
+    # Count actual occurrences in the dataset
+    counts = np.zeros(len(COMPONENT_TYPES))
     
-    # Compute weights (inverse of frequency)
+    for data in dataset:
+        if data is not None:
+            counts[data.y.item()] += 1
+    
+    print(f"Actual class distribution: {counts}")
+    
+    # Use sklearn's balanced class weights
+    if counts.sum() > 0:
+        # Convert to class labels for sklearn
+        all_labels = []
+        for data in dataset:
+            if data is not None:
+                all_labels.append(data.y.item())
+        
+        if len(all_labels) > 0:
+            weights = compute_class_weight('balanced', classes=np.arange(len(COMPONENT_TYPES)), y=all_labels)
+            return torch.tensor(weights, dtype=torch.float32, device=device)
+    
+    # Fallback to manual calculation
+    counts = np.array([845, 706, 305, 248])  # Your original counts
     weights = 1.0 / (counts / counts.sum())
-    
-    # Normalize
     weights = weights / weights.sum() * len(weights)
     
     return torch.tensor(weights, dtype=torch.float32, device=device)
@@ -346,7 +363,7 @@ def run_cross_validation(config, representation='star'):
     # Save results
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     results_dir = Path(f"fegin_experiments/fegin_results_{representation}_{timestamp}")
-    results_dir.mkdir(exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
     
     with open(results_dir / "cv_results.json", 'w') as f:
         json.dump({

@@ -18,9 +18,10 @@ class GNNEncoder(nn.Module):
         
         # Input projection (from discrete features to embeddings)
         # Updated for 4-class problem (R, C, V, X)
-        self.node_type_emb = nn.Embedding(5, hidden_channels)  # 4 types + padding
-        self.comp_type_emb = nn.Embedding(6, hidden_channels)  # 4 types + padding + special
-        self.pin_type_emb = nn.Embedding(6, hidden_channels)  # 4 pin types + padding + special
+        # Expanded embedding dimensions to include masked tokens
+        self.node_type_emb = nn.Embedding(6, hidden_channels)  # 4 types + padding + masked
+        self.comp_type_emb = nn.Embedding(7, hidden_channels)  # 4 types + padding + special + masked
+        self.pin_type_emb = nn.Embedding(7, hidden_channels)   # 4 pin types + padding + special + masked
         
         # Initial projection
         self.input_proj = nn.Linear(hidden_channels * 3, hidden_channels)

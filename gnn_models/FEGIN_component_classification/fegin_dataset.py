@@ -7,6 +7,7 @@ import networkx as nx
 import pickle
 import os
 from graph_descriptors import GraphDescriptorCache
+import numpy as np
 
 # Only the 4 component types we want to classify (including X/subcircuits as baseline is also predicting 'sub elements')
 COMPONENT_TYPES = ["R", "C", "V", "X"]  # 4-class problem
@@ -49,10 +50,6 @@ class FEGINDatasetFiltered(Dataset):
         return len(self.files)
     
     def get(self, idx):
-        """
-        Load graph, create masked version, convert to PyG Data
-        Only mask R, C, V components and X subcircuits
-        """
         # Load graph
         graph_path = os.path.join(self.folder, self.files[idx])
         with open(graph_path, 'rb') as f:
@@ -77,6 +74,9 @@ class FEGINDatasetFiltered(Dataset):
         
         # Create masked graph
         G_masked = self.create_masked_graph(G, masked_component)
+        # Data augmentation for training
+        if 'train' in self.folder and np.random.random() < 0.5:
+            G_masked = self.augment_training_data(G_masked, masked_component, comp_type)
         
         # Convert to PyG Data
         data = self.graph_to_data(G_masked)
@@ -94,34 +94,24 @@ class FEGINDatasetFiltered(Dataset):
     
     def create_masked_graph(self, G, masked_component):
         G_masked = G.copy()
+    
+        G_masked.nodes[masked_component]['is_masked'] = True
         
-        if self.mask_strategy == 'remove_pins':
-            # Remove component and pins entirely
-            nodes_to_remove = [masked_component]
-            
-            for neighbor in G.neighbors(masked_component):
-                node_attr = G.nodes[neighbor]
-                if (node_attr.get("type") == "pin" and 
-                    node_attr.get("component") == masked_component):
-                    nodes_to_remove.append(neighbor)
-            
-            G_masked.remove_nodes_from(nodes_to_remove)
-            
-        elif self.mask_strategy == 'keep_pins':
-            # Keep pins but mask features
-            G_masked.nodes[masked_component]['is_masked'] = True
-            
-            if 'features' in G_masked.nodes[masked_component]:
-                G_masked.nodes[masked_component]['features']['comp_type_idx'] = -1
-            
-            # Mask pins
-            for neighbor in G.neighbors(masked_component):
-                node_attr = G.nodes[neighbor]
-                if (node_attr.get("type") == "pin" and 
-                    node_attr.get("component") == masked_component):
-                    G_masked.nodes[neighbor]['is_masked'] = True
-                    if 'features' in G_masked.nodes[neighbor]:
-                        G_masked.nodes[neighbor]['features']['pin_type_idx'] = -1
+        if 'features' in G_masked.nodes[masked_component]:
+            original_comp_type = G_masked.nodes[masked_component]['features'].get('comp_type_idx', -1)
+            G_masked.nodes[masked_component]['features']['original_comp_type'] = original_comp_type
+            G_masked.nodes[masked_component]['features']['comp_type_idx'] = 4  # masking token
+        
+        # mask pins more gently
+        for neighbor in G.neighbors(masked_component):
+            node_attr = G.nodes[neighbor]
+            if (node_attr.get("type") == "pin" and 
+                node_attr.get("component") == masked_component):
+                G_masked.nodes[neighbor]['is_masked'] = True
+                if 'features' in G_masked.nodes[neighbor]:
+                    original_pin_type = G_masked.nodes[neighbor]['features'].get('pin_type_idx', -1)
+                    G_masked.nodes[neighbor]['features']['original_pin_type'] = original_pin_type
+                    G_masked.nodes[neighbor]['features']['pin_type_idx'] = 5 # masking token
         
         return G_masked
     
@@ -239,6 +229,19 @@ class FEGINDatasetFiltered(Dataset):
         )
         
         return data
+    
+    def augment_training_data(self, G, masked_component, comp_type):
+        # random edge dropout
+        G_augmented = G.copy()
+        
+        # randomly remove 10 percent of edges (except those connected to masked component)
+        edges_to_remove = []
+        for u, v in G_augmented.edges():
+            if u != masked_component and v != masked_component and np.random.random() < 0.1:
+                edges_to_remove.append((u, v))
+        
+        G_augmented.remove_edges_from(edges_to_remove)
+        return G_augmented
 
 def collate_fegin(batch):
     """Custom collate function that handles graph descriptors correctly."""
