@@ -2,8 +2,8 @@
 
 import torch
 import torch.nn as nn
-from torch_geometric.loader import DataLoader
-print("Using DataLoader:", DataLoader)
+# from torch_geometric.loader import DataLoader
+from torch.utils.data import DataLoader
 import numpy as np
 from sklearn.metrics import f1_score, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
