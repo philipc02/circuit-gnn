@@ -106,7 +106,7 @@ class FEGIN(nn.Module):
         )
         # Graph descriptor dimension (with DGSD support)
         descriptor_dim = get_descriptor_dimension(
-            n_eigenvalues, dgsd_bins, use_dgsd
+            n_eigenvalues, dgsd_bins
         ) if use_descriptors else 0
 
         # GNN produces 3 * hidden_channels (mean + max + sum pooling)
