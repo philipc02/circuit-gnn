@@ -118,7 +118,7 @@ class FEGIN(nn.Module):
         sort_pool_dim = k * hidden_channels
 
         # GNN produces 3 * hidden_channels (mean + max + sum pooling)
-        # gnn_output_dim = hidden_channels * 3
+        traditional_gnn_output_dim = hidden_channels * 3
         
         # Descriptor MLP (if using descriptors)
         if use_descriptors:
@@ -129,10 +129,10 @@ class FEGIN(nn.Module):
                 nn.Linear(hidden_channels, hidden_channels),
                 nn.ReLU()
             )
-            fusion_input_dim = sort_pool_dim + hidden_channels
+            fusion_input_dim = traditional_gnn_output_dim + sort_pool_dim + hidden_channels
         else:
             self.descriptor_mlp = None
-            fusion_input_dim = sort_pool_dim
+            fusion_input_dim = traditional_gnn_output_dim + sort_pool_dim
         
         # Fusion and classification layers
         self.fusion = nn.Sequential(
@@ -150,15 +150,19 @@ class FEGIN(nn.Module):
         # GNN encoding
         gnn_embedding = self.gnn_encoder.get_node_embeddings(data.x, data.edge_index)
 
+        traditional_pool = self.gnn_encoder(data.x, data.edge_index, data.batch)
         sort_pooling_embedding = global_sort_pool(gnn_embedding, data.batch, k=self.k)
+
+        # Combine pooling strategies
+        gnn_combined = torch.cat([traditional_pool, sort_pooling_embedding], dim=1)
         
         # Descriptor encoding (if available)
         if self.use_descriptors and hasattr(data, 'graph_descriptor'):
             descriptor_embedding = self.descriptor_mlp(data.graph_descriptor)
             # Concatenate GNN and descriptor embeddings
-            combined = torch.cat([sort_pooling_embedding, descriptor_embedding], dim=1)
+            combined = torch.cat([gnn_combined, descriptor_embedding], dim=1)
         else:
-            combined = sort_pooling_embedding
+            combined = gnn_combined
         
         # Fusion and classification
         fused = self.fusion(combined)
