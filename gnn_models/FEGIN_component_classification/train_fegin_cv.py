@@ -14,7 +14,7 @@ from pathlib import Path
 import datetime
 
 from fegin_model import FEGIN, BaselineGNN
-from fegin_dataset import FEGINDatasetFiltered, CustomFEGINDatasetFiltered, collate_fegin
+from fegin_dataset import FEGINDatasetFiltered, collate_fegin
 
 COMPONENT_TYPES = ["R", "C", "V", "X"]
 
@@ -387,7 +387,7 @@ def train_simple_split(config, representation='star',
 
     masks_per_graph = config.get('masks_per_graph', 4)
 
-    train_dataset = CustomFEGINDatasetFiltered(
+    train_dataset = FEGINDatasetFiltered(
         train_data, 
         representation=representation,
         mask_strategy='keep_pins',
@@ -395,7 +395,7 @@ def train_simple_split(config, representation='star',
         training=True
     )
     
-    test_dataset = CustomFEGINDatasetFiltered(
+    test_dataset = FEGINDatasetFiltered(
         test_data,
         representation=representation, 
         mask_strategy='keep_pins',
