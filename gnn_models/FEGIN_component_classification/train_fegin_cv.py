@@ -391,7 +391,7 @@ def train_simple_split(config, representation='star',
         representation=representation,
         mask_strategy='keep_pins',
         masks_per_graph=masks_per_graph,
-        is_training=True
+        training=True
     )
     
     test_dataset = CustomFEGINDatasetFiltered(
@@ -399,7 +399,7 @@ def train_simple_split(config, representation='star',
         representation=representation, 
         mask_strategy='keep_pins',
         masks_per_graph=masks_per_graph,
-        is_training=False
+        training=False
     )
 
     print(f"Final dataset sizes:")
