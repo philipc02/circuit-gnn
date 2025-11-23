@@ -384,10 +384,6 @@ def train_simple_split(config, representation='star',
     
     print(f"Train: {len(train_data)}, Test: {len(test_data)}")
 
-    # class weights
-    class_weights = compute_class_weights(train_data, device)
-    print(f"Class weights: {class_weights}")
-
     masks_per_graph = config.get('masks_per_graph', 4)
 
     train_dataset = CustomFEGINDatasetFiltered(
@@ -410,14 +406,18 @@ def train_simple_split(config, representation='star',
     print(f"  Training: {len(train_dataset)} samples ({len(train_data)} graphs * {masks_per_graph} masks)")
     print(f"  Testing:  {len(test_dataset)} samples ({len(test_data)} graphs * {masks_per_graph} masks)")
 
+    # class weights
+    class_weights = compute_class_weights(train_dataset, device)
+    print(f"Class weights: {class_weights}")
+
     train_loader = DataLoader(
-        train_data, 
+        train_dataset, 
         batch_size=config['batch_size'],
         shuffle=True,
         collate_fn=collate_fegin
     )
     test_loader = DataLoader(
-        test_data,
+        test_dataset,
         batch_size=config['batch_size'],
         collate_fn=collate_fegin
     )
@@ -542,7 +542,7 @@ if __name__ == "__main__":
         'patience': 100,
         'use_descriptors': True,
         'sort_pool_k': 30,
-        'masks_per_graphs': 4
+        'masks_per_graph': 4
     }
     
 

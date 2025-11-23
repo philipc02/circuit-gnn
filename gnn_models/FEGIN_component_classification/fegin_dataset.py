@@ -316,7 +316,7 @@ class CustomFEGINDatasetFiltered(Dataset):
                               if (attr.get("type") == "component" and attr.get("comp_type") in ["R", "C", "V"])
                               or (attr.get("type") == "subcircuit" and attr.get("comp_type") == "X")]
             
-            self.graph_data_cache[filename] = {
+            self.graph_data_cache[(folder, filename)] = {
                 'original_graph': G,
                 'maskable_components': component_nodes
             }
@@ -357,7 +357,7 @@ class CustomFEGINDatasetFiltered(Dataset):
         # Create masked graph
         G_masked = self.create_masked_graph(G, masked_component)
         # Data augmentation for training with reproducible randomness
-        if 'train' in self.folder and np.random.random() < 0.5:
+        if self.training and np.random.random() < 0.5:
             G_masked = self.augment_training_data(G_masked, masked_component, comp_type, rng)
         
         # Convert to PyG Data
