@@ -5,6 +5,7 @@ import torch.nn as nn
 import os
 # from torch_geometric.loader import DataLoader
 from torch.utils.data import DataLoader
+import networkx as nx
 import numpy as np
 from sklearn.metrics import f1_score, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
@@ -405,6 +406,94 @@ def train_simple_split(config, representation='star',
     print(f"Final dataset sizes:")
     print(f"  Training: {len(train_dataset)} samples ({len(train_data)} graphs * {masks_per_graph} masks)")
     print(f"  Testing:  {len(test_dataset)} samples ({len(test_data)} graphs * {masks_per_graph} masks)")
+
+    def debug_dataset(dataset, name):
+        print(f"\n=== {name} Dataset Debug ===")
+        
+        # Check a few samples
+        for i in range(min(5, len(dataset))):
+            data = dataset[i]
+            if data is not None:
+                print(f"Sample {i}:")
+                print(f"  Nodes: {data.num_nodes}, Edges: {data.edge_index.shape[1]}")
+                print(f"  Features shape: {data.x.shape}")
+                print(f"  Label: {data.y.item()} ({COMPONENT_TYPES[data.y.item()]})")
+                print(f"  Batch: {data.batch if hasattr(data, 'batch') else 'No batch'}")
+                print(f"  Descriptor shape: {data.graph_descriptor.shape if hasattr(data, 'graph_descriptor') else 'No descriptor'}")
+                print(f"  Has isolated nodes: {(data.edge_index.shape[1] == 0)}")
+                print()
+
+    # Add this right after creating your datasets
+    debug_dataset(train_dataset, "Training")
+    debug_dataset(test_dataset, "Test")
+
+    def verify_masking(dataset):
+        print("\n=== Masking Verification ===")
+        
+        masked_counts = {comp: 0 for comp in COMPONENT_TYPES}
+        total_masked = 0
+        
+        for i in range(min(20, len(dataset))):
+            data = dataset[i]
+            if data is not None:
+                # Count masked nodes (features with comp_type_idx = 4)
+                masked_nodes = (data.x[:, 1] == 4).sum().item()
+                if masked_nodes > 0:
+                    total_masked += 1
+                    label = COMPONENT_TYPES[data.y.item()]
+                    masked_counts[label] += 1
+        
+        print(f"Total graphs with masked components: {total_masked}")
+        print("Masked component distribution:")
+        for comp, count in masked_counts.items():
+            print(f"  {comp}: {count}")
+        print()
+
+    # Call this after dataset creation
+    verify_masking(train_dataset)
+
+    def debug_descriptors(dataset):
+        print("\n=== Descriptor Debug ===")
+        
+        for i in range(min(5, len(dataset))):
+            data = dataset[i]
+            if data is not None and hasattr(data, 'graph_descriptor'):
+                desc = data.graph_descriptor
+                print(f"Sample {i}: Descriptor shape: {desc.shape}")
+                print(f"  Min: {desc.min():.4f}, Max: {desc.max():.4f}, Mean: {desc.mean():.4f}")
+                print(f"  NaN values: {torch.isnan(desc).sum().item()}")
+                print(f"  Inf values: {torch.isinf(desc).sum().item()}")
+                print()
+
+    debug_descriptors(train_dataset)
+
+    def analyze_graph_connectivity(dataset):
+        print("\n=== Graph Connectivity Analysis ===")
+        
+        disconnected_count = 0
+        small_component_count = 0
+        
+        for i in range(min(50, len(dataset))):
+            data = dataset[i]
+            if data is not None:
+                # Convert back to networkx to check connectivity
+                edge_index = data.edge_index.cpu().numpy()
+                G = nx.Graph()
+                G.add_edges_from(edge_index.T)
+                
+                if not nx.is_connected(G):
+                    disconnected_count += 1
+                    components = list(nx.connected_components(G))
+                    if len(components) > 1:
+                        largest = max(components, key=len)
+                        if len(largest) < data.num_nodes * 0.5:  # If largest component < 50% of nodes
+                            small_component_count += 1
+        
+        print(f"Disconnected graphs: {disconnected_count}/50")
+        print(f"Graphs with small main components: {small_component_count}/50")
+        print("If many graphs are disconnected, masking might be too aggressive!")
+
+    analyze_graph_connectivity(train_dataset)
 
     # class weights
     class_weights = compute_class_weights(train_dataset, device)
