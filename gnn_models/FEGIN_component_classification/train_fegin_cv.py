@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import os
 # from torch_geometric.loader import DataLoader
 from torch.utils.data import DataLoader
 import numpy as np
@@ -12,7 +13,7 @@ from pathlib import Path
 import datetime
 
 from fegin_model import FEGIN, BaselineGNN
-from fegin_dataset import FEGINDatasetFiltered, collate_fegin
+from fegin_dataset import FEGINDatasetFiltered, CustomFEGINDatasetFiltered, collate_fegin
 
 COMPONENT_TYPES = ["R", "C", "V", "X"]
 
@@ -361,24 +362,17 @@ def train_simple_split(config, representation='star',
     
     print(f"Training with 80:20 split | Representation: {representation}")
 
-    # combine all folds to create one large dataset
+    # Use ONLY ONE FOLD as it has complete dataset
+    fold_dir = f"{base_folder}/fold_0"
+    
+    # Load all graphs from the single fold
     all_graphs = []
-    for fold_idx in range(5):
-        fold_dir = f"{base_folder}/fold_{fold_idx}"
-        
-        # load all splits from each fold
-        for split in ['train', 'val', 'test']:
-            dataset = FEGINDatasetFiltered(
-                fold_dir, split, 
-                representation=representation,
-                mask_strategy='keep_pins'
-            )
-            # Add to all_graophs[] 
-            for i in range(len(dataset)):
-                data = dataset[i]
-                if data is not None:
-                    all_graphs.append(data)
-
+    for split in ['train', 'val', 'test']:
+        split_folder = os.path.join(fold_dir, split)
+        if os.path.exists(split_folder):
+            files = [f for f in os.listdir(split_folder) if f.endswith(".gpickle")]
+            all_graphs.extend([(split_folder, f) for f in files])
+    
     # We expect 194
     print(f"Total graphs collected: {len(all_graphs)}")
 
@@ -393,6 +387,28 @@ def train_simple_split(config, representation='star',
     # class weights
     class_weights = compute_class_weights(train_data, device)
     print(f"Class weights: {class_weights}")
+
+    masks_per_graph = config.get('masks_per_graph', 4)
+
+    train_dataset = CustomFEGINDatasetFiltered(
+        train_data, 
+        representation=representation,
+        mask_strategy='keep_pins',
+        masks_per_graph=masks_per_graph,
+        is_training=True
+    )
+    
+    test_dataset = CustomFEGINDatasetFiltered(
+        test_data,
+        representation=representation, 
+        mask_strategy='keep_pins',
+        masks_per_graph=masks_per_graph,
+        is_training=False
+    )
+
+    print(f"Final dataset sizes:")
+    print(f"  Training: {len(train_dataset)} samples ({len(train_data)} graphs * {masks_per_graph} masks)")
+    print(f"  Testing:  {len(test_dataset)} samples ({len(test_data)} graphs * {masks_per_graph} masks)")
 
     train_loader = DataLoader(
         train_data, 
@@ -525,7 +541,8 @@ if __name__ == "__main__":
         'num_epochs': 100,
         'patience': 100,
         'use_descriptors': True,
-        'sort_pool_k': 30
+        'sort_pool_k': 30,
+        'masks_per_graphs': 4
     }
     
 

@@ -19,7 +19,7 @@ class FEGINDatasetFiltered(Dataset):
 
     
     def __init__(self, fold_dir, split, representation='star', 
-                 mask_strategy='keep_pins', n_eigenvalues=10, dgsd_bins=10):
+                 mask_strategy='keep_pins', n_eigenvalues=10, dgsd_bins=10, masks_per_graph=4):
         """
         Args:
             fold_dir: Path to fold directory
@@ -36,36 +36,63 @@ class FEGINDatasetFiltered(Dataset):
         self.mask_strategy = mask_strategy
         self.n_eigenvalues = n_eigenvalues
         self.dgsd_bins = dgsd_bins
+        self.masks_per_graph = masks_per_graph
         
         # Load all graph files
         self.files = sorted([f for f in os.listdir(self.folder) 
                            if f.endswith(".gpickle")])
         
+        # Precompute all possible masks for each graph
+        self.graph_data_cache = {}  # cache for efficiency
+        self.create_masks()
+        
         # Initialize descriptor cache
         self.descriptor_cache = GraphDescriptorCache(n_eigenvalues, dgsd_bins)
         
         print(f"Loaded {len(self.files)} graphs from {self.folder}")
+
+    def create_masks(self):
+        for filename in self.files:
+            graph_path = os.path.join(self.folder, filename)
+            with open(graph_path, 'rb') as f:
+                G = pickle.load(f)
+            
+            component_nodes = [n for n, attr in G.nodes(data=True) 
+                              if (attr.get("type") == "component" and attr.get("comp_type") in ["R", "C", "V"])
+                              or (attr.get("type") == "subcircuit" and attr.get("comp_type") == "X")]
+            
+            self.graph_data_cache[filename] = {
+                'original_graph': G,
+                'maskable_components': component_nodes
+            }
     
     def len(self):
-        return len(self.files)
+        return len(self.files) * self.masks_per_graph
     
     def get(self, idx):
-        # Load graph
-        graph_path = os.path.join(self.folder, self.files[idx])
-        with open(graph_path, 'rb') as f:
-            G = pickle.load(f)
+
+        graph_idx = idx // self.masks_per_graph
+        mask_idx = idx % self.masks_per_graph
+
+        filename = self.files[graph_idx]
+        cache_data = self.graph_data_cache[filename]
+        G = cache_data['original_graph']
+        maskable_components = cache_data['maskable_components']
         
-        # Get R, C, V components AND X subcircuits
-        component_nodes = [n for n, attr in G.nodes(data=True) 
-                          if (attr.get("type") == "component" and attr.get("comp_type") in ["R", "C", "V"])
-                          or (attr.get("type") == "subcircuit" and attr.get("comp_type") == "X")]
-        
-        if len(component_nodes) == 0:
+        if len(maskable_components) == 0:
             return None
         
-        # Randonly select a component to mask
-        import random
-        masked_component = random.choice(component_nodes)
+        # Use deterministic masking based on idx to ensure reproducibility
+        # Ensures the same idx always returns same masked graph
+        rng = np.random.RandomState(seed=idx)  # use idx as seed for reproducibility
+        
+        # component to mask (different for each mask_idx)
+        if mask_idx < len(maskable_components):
+            masked_component = maskable_components[mask_idx]
+        else:
+            # more masks than available components -> wrap around
+            masked_component = maskable_components[mask_idx % len(maskable_components)]
+        
         comp_type = G.nodes[masked_component].get("comp_type")
         
         # Check validity
@@ -74,21 +101,23 @@ class FEGINDatasetFiltered(Dataset):
         
         # Create masked graph
         G_masked = self.create_masked_graph(G, masked_component)
-        # Data augmentation for training
+        # Data augmentation for training with reproducible randomness
         if 'train' in self.folder and np.random.random() < 0.5:
-            G_masked = self.augment_training_data(G_masked, masked_component, comp_type)
+            G_masked = self.augment_training_data(G_masked, masked_component, comp_type, rng)
         
         # Convert to PyG Data
         data = self.graph_to_data(G_masked)
         
         # add graph descriptors
-        descriptor = self.descriptor_cache.get_or_compute(self.files[idx], G_masked)
+        # filename and mask_idx as unique identifier for descriptor cache
+        descriptor_id = f"{filename}_mask{mask_idx}"
+        descriptor = self.descriptor_cache.get_or_compute(descriptor_id, G_masked)
         data.graph_descriptor = descriptor
         
         # add label
         data.y = torch.tensor(COMPONENT_TYPES.index(comp_type), dtype=torch.long)
         data.masked_component = masked_component
-        data.graph_id = self.files[idx]
+        data.graph_id = f"{filename}_mask{mask_idx}"  # with mask info
         
         return data
     
@@ -230,14 +259,269 @@ class FEGINDatasetFiltered(Dataset):
         
         return data
     
-    def augment_training_data(self, G, masked_component, comp_type):
+    def augment_training_data(self, G, masked_component, comp_type, rng):
         # random edge dropout
         G_augmented = G.copy()
         
         # randomly remove 10 percent of edges (except those connected to masked component)
         edges_to_remove = []
         for u, v in G_augmented.edges():
-            if u != masked_component and v != masked_component and np.random.random() < 0.1:
+            if u != masked_component and v != masked_component and rng.random() < 0.1:
+                edges_to_remove.append((u, v))
+        
+        G_augmented.remove_edges_from(edges_to_remove)
+        return G_augmented
+    
+class CustomFEGINDatasetFiltered(Dataset):
+    # Dataset for FEGIN component classification with filtered types
+    # Prredicts R, C, V, X
+
+    
+    def __init__(self, graph_files, representation='star', 
+                 mask_strategy='keep_pins', n_eigenvalues=10, dgsd_bins=10, masks_per_graph=4, training=True):
+        """
+        Args:
+            fold_dir: Path to fold directory
+            split: 'train', 'val', 'test'
+            representation: 'star', 'component'
+            mask_strategy: 'keep_pins', 'remove_pins'
+            n_eigenvalues: Number of eigenvalues for NetLSD
+            dgsd_bins: Number of bins for DGSD
+        """
+        super().__init__()
+        
+        self.graph_files = graph_files  #List of (folder, filename) tuples
+        self.representation = representation
+        self.mask_strategy = mask_strategy
+        self.n_eigenvalues = n_eigenvalues
+        self.dgsd_bins = dgsd_bins
+        self.masks_per_graph = masks_per_graph
+        self.training = training
+        
+        
+        # Precompute all possible masks for each graph
+        self.graph_data_cache = {}  # cache for efficiency
+        self.create_masks()
+        
+        # Initialize descriptor cache
+        self.descriptor_cache = GraphDescriptorCache(n_eigenvalues, dgsd_bins)
+        
+    def create_masks(self):
+        for folder, filename in self.graph_files:
+            graph_path = os.path.join(folder, filename)
+            with open(graph_path, 'rb') as f:
+                G = pickle.load(f)
+            
+            component_nodes = [n for n, attr in G.nodes(data=True) 
+                              if (attr.get("type") == "component" and attr.get("comp_type") in ["R", "C", "V"])
+                              or (attr.get("type") == "subcircuit" and attr.get("comp_type") == "X")]
+            
+            self.graph_data_cache[filename] = {
+                'original_graph': G,
+                'maskable_components': component_nodes
+            }
+    
+    def len(self):
+        return len(self.graph_files) * self.masks_per_graph
+    
+    def get(self, idx):
+
+        graph_idx = idx // self.masks_per_graph
+        mask_idx = idx % self.masks_per_graph
+
+        folder, filename = self.graph_files[graph_idx]
+        cache_data = self.graph_data_cache[(folder, filename)]
+        G = cache_data['original_graph']
+        maskable_components = cache_data['maskable_components']
+        
+        if len(maskable_components) == 0:
+            return None
+        
+        # Use deterministic masking based on idx to ensure reproducibility
+        # Ensures the same idx always returns same masked graph
+        rng = np.random.RandomState(seed=idx)  # use idx as seed for reproducibility
+        
+        # component to mask (different for each mask_idx)
+        if mask_idx < len(maskable_components):
+            masked_component = maskable_components[mask_idx]
+        else:
+            # more masks than available components -> wrap around
+            masked_component = maskable_components[mask_idx % len(maskable_components)]
+        
+        comp_type = G.nodes[masked_component].get("comp_type")
+        
+        # Check validity
+        if comp_type not in COMPONENT_TYPES:
+            return None
+        
+        # Create masked graph
+        G_masked = self.create_masked_graph(G, masked_component)
+        # Data augmentation for training with reproducible randomness
+        if 'train' in self.folder and np.random.random() < 0.5:
+            G_masked = self.augment_training_data(G_masked, masked_component, comp_type, rng)
+        
+        # Convert to PyG Data
+        data = self.graph_to_data(G_masked)
+        
+        # add graph descriptors
+        # filename and mask_idx as unique identifier for descriptor cache
+        descriptor_id = f"{filename}_mask{mask_idx}"
+        descriptor = self.descriptor_cache.get_or_compute(descriptor_id, G_masked)
+        data.graph_descriptor = descriptor
+        
+        # add label
+        data.y = torch.tensor(COMPONENT_TYPES.index(comp_type), dtype=torch.long)
+        data.masked_component = masked_component
+        data.graph_id = f"{filename}_mask{mask_idx}"  # with mask info
+        
+        return data
+    
+    def create_masked_graph(self, G, masked_component):
+        G_masked = G.copy()
+    
+        G_masked.nodes[masked_component]['is_masked'] = True
+        
+        if 'features' in G_masked.nodes[masked_component]:
+            original_comp_type = G_masked.nodes[masked_component]['features'].get('comp_type_idx', -1)
+            G_masked.nodes[masked_component]['features']['original_comp_type'] = original_comp_type
+            G_masked.nodes[masked_component]['features']['comp_type_idx'] = 4  # masking token
+        
+        # mask pins more gently
+        for neighbor in G.neighbors(masked_component):
+            node_attr = G.nodes[neighbor]
+            if (node_attr.get("type") == "pin" and 
+                node_attr.get("component") == masked_component):
+                G_masked.nodes[neighbor]['is_masked'] = True
+                if 'features' in G_masked.nodes[neighbor]:
+                    original_pin_type = G_masked.nodes[neighbor]['features'].get('pin_type_idx', -1)
+                    G_masked.nodes[neighbor]['features']['original_pin_type'] = original_pin_type
+                    G_masked.nodes[neighbor]['features']['pin_type_idx'] = 5 # masking token
+        
+        return G_masked
+    
+    def graph_to_data(self, G):
+        if self.representation == 'star':
+            return self.stargraph_to_data(G)
+        elif self.representation == 'component':
+            return self.componentgraph_to_data(G)
+        else:
+            raise ValueError(f"Unknown representation: {self.representation}")
+    
+    def stargraph_to_data(self, G):
+        all_nodes = list(G.nodes())
+        node_to_idx = {n: i for i, n in enumerate(all_nodes)}
+        
+        # Build node features
+        node_features = []
+        node_types = []
+        is_masked = []
+        
+        for node in all_nodes:
+            attr = G.nodes[node]
+            feat_dict = attr.get("features", {})
+            
+            feat = [
+                feat_dict.get("node_type_idx", -1),
+                feat_dict.get("comp_type_idx", -1),
+                feat_dict.get("pin_type_idx", -1)
+            ]
+            node_features.append(feat)
+            
+            # Node type
+            node_type_map = {"component": 0, "pin": 1, "net": 2, "subcircuit": 3}
+            node_types.append(node_type_map.get(attr.get("type"), -1))
+            
+            # Masked indicator
+            is_masked.append(1 if attr.get('is_masked', False) else 0)
+        
+        x = torch.tensor(node_features, dtype=torch.long)
+        node_type = torch.tensor(node_types, dtype=torch.long)
+        mask = torch.tensor(is_masked, dtype=torch.long)
+        
+        # Build edges
+        edge_index = []
+        for u, v in G.edges():
+            u_idx = node_to_idx[u]
+            v_idx = node_to_idx[v]
+            edge_index.append([u_idx, v_idx])
+            edge_index.append([v_idx, u_idx])
+        
+        if edge_index:
+            edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+        else:
+            edge_index = torch.empty((2, 0), dtype=torch.long)
+        
+        data = Data(
+            x=x,
+            edge_index=edge_index,
+            node_type=node_type,
+            is_masked=mask,
+            num_nodes=len(all_nodes)
+        )
+        
+        return data
+    
+    def componentgraph_to_data(self, G):
+        # Include both components and subcircuits
+        component_nodes = [n for n, attr in G.nodes(data=True) 
+                          if attr.get("type") in ["component", "subcircuit"]]
+        
+        if len(component_nodes) == 0:
+            return Data(x=torch.empty((0, 3), dtype=torch.long),
+                       edge_index=torch.empty((2, 0), dtype=torch.long),
+                       num_nodes=0)
+        
+        node_to_idx = {n: i for i, n in enumerate(component_nodes)}
+        
+        node_features = []
+        is_masked = []
+        
+        for node in component_nodes:
+            attr = G.nodes[node]
+            feat_dict = attr.get("features", {})
+            
+            feat = [
+                feat_dict.get("node_type_idx", -1),
+                feat_dict.get("comp_type_idx", -1),
+                -1  # No pin type
+            ]
+            node_features.append(feat)
+            is_masked.append(1 if attr.get('is_masked', False) else 0)
+        
+        x = torch.tensor(node_features, dtype=torch.long)
+        mask = torch.tensor(is_masked, dtype=torch.long)
+        
+        # Build edges
+        edge_index = []
+        for u, v in G.edges():
+            if u in node_to_idx and v in node_to_idx:
+                u_idx = node_to_idx[u]
+                v_idx = node_to_idx[v]
+                edge_index.append([u_idx, v_idx])
+                edge_index.append([v_idx, u_idx])
+        
+        if edge_index:
+            edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+        else:
+            edge_index = torch.empty((2, 0), dtype=torch.long)
+        
+        data = Data(
+            x=x,
+            edge_index=edge_index,
+            is_masked=mask,
+            num_nodes=len(component_nodes)
+        )
+        
+        return data
+    
+    def augment_training_data(self, G, masked_component, comp_type, rng):
+        # random edge dropout
+        G_augmented = G.copy()
+        
+        # randomly remove 10 percent of edges (except those connected to masked component)
+        edges_to_remove = []
+        for u, v in G_augmented.edges():
+            if u != masked_component and v != masked_component and rng.random() < 0.1:
                 edges_to_remove.append((u, v))
         
         G_augmented.remove_edges_from(edges_to_remove)
