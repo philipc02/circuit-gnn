@@ -12,7 +12,7 @@ import numpy as np
 COMPONENT_TYPES = ["R", "C", "V", "X"]
 
 
-class CustomFEGINDatasetFiltered(Dataset):
+class FEGINDatasetFiltered(Dataset):
     """
     FIXED: Component representation now maintains graph connectivity
     by keeping the full star graph but zeroing out features appropriately
@@ -329,7 +329,7 @@ if __name__ == "__main__":
     test_files = [(temp_dir, "test.gpickle")]
     
     print("Testing STAR representation:")
-    dataset_star = CustomFEGINDatasetFiltered(
+    dataset_star = FEGINDatasetFiltered(
         test_files,
         representation='star',
         masks_per_graph=1,
@@ -343,7 +343,7 @@ if __name__ == "__main__":
         print(f"  Has edges: {sample.edge_index.shape[1] > 0}")
     
     print("\nTesting COMPONENT representation (FIXED):")
-    dataset_comp = CustomFEGINDatasetFiltered(
+    dataset_comp = FEGINDatasetFiltered(
         test_files,
         representation='component',
         masks_per_graph=1,
