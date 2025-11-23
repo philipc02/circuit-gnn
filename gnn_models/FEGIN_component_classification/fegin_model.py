@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GINConv, GATConv, GCNConv, SAGEConv
-from torch_geometric.nn import global_mean_pool, global_max_pool, global_add_pool
+from torch_geometric.nn import global_mean_pool, global_max_pool, global_add_pool, global_sort_pool
 from graph_descriptors import get_descriptor_dimension
 
 
@@ -54,6 +54,19 @@ class GNNEncoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
     
     def forward(self, x, edge_index, batch):
+        x_embedded = self.get_node_embeddings(x, edge_index)
+        
+        # Graph-level pooling
+        graph_mean = global_mean_pool(x_embedded, batch)
+        graph_max = global_max_pool(x_embedded, batch)
+        graph_sum = global_add_pool(x_embedded, batch)
+        
+        # Combine different pooling strategies
+        graph_embedding = torch.cat([graph_mean, graph_max, graph_sum], dim=1)
+
+        return graph_embedding
+
+    def get_node_embeddings(self, x, edge_index):
         # Embed discrete features
         node_type_idx = x[:, 0].clamp(min=0)
         comp_type_idx = x[:, 1].clamp(min=0)
@@ -77,26 +90,18 @@ class GNNEncoder(nn.Module):
             if i > 0:
                 x_new = x_new + x
             
-            x = self.dropout(x_new)
-        
-        # Graph-level pooling
-        graph_mean = global_mean_pool(x, batch)
-        graph_max = global_max_pool(x, batch)
-        graph_sum = global_add_pool(x, batch)
-        
-        # Combine different pooling strategies
-        graph_embedding = torch.cat([graph_mean, graph_max, graph_sum], dim=1)
-        
-        return graph_embedding
+            x = self.dropout(x_new) 
+        return x
 
 
 class FEGIN(nn.Module):
     def __init__(self, hidden_channels, num_classes=4, num_layers=3, 
                  gnn_type='gin', dropout=0.3, n_eigenvalues=10,
-                 dgsd_bins=10, use_dgsd=True, use_descriptors=True):
+                 dgsd_bins=10, use_dgsd=True, use_descriptors=True, k=30):
         super().__init__()
         
         self.use_descriptors = use_descriptors
+        self.k = k  # sort pooling parameter
         
         # GNN encoder
         self.gnn_encoder = GNNEncoder(
@@ -110,8 +115,10 @@ class FEGIN(nn.Module):
             n_eigenvalues, dgsd_bins
         ) if use_descriptors else 0
 
+        sort_pool_dim = k * hidden_channels
+
         # GNN produces 3 * hidden_channels (mean + max + sum pooling)
-        gnn_output_dim = hidden_channels * 3
+        # gnn_output_dim = hidden_channels * 3
         
         # Descriptor MLP (if using descriptors)
         if use_descriptors:
@@ -122,10 +129,10 @@ class FEGIN(nn.Module):
                 nn.Linear(hidden_channels, hidden_channels),
                 nn.ReLU()
             )
-            fusion_input_dim = gnn_output_dim + hidden_channels
+            fusion_input_dim = sort_pool_dim + hidden_channels
         else:
             self.descriptor_mlp = None
-            fusion_input_dim = gnn_output_dim
+            fusion_input_dim = sort_pool_dim
         
         # Fusion and classification layers
         self.fusion = nn.Sequential(
@@ -141,15 +148,17 @@ class FEGIN(nn.Module):
     
     def forward(self, data):
         # GNN encoding
-        gnn_embedding = self.gnn_encoder(data.x, data.edge_index, data.batch)
+        gnn_embedding = self.gnn_encoder.get_node_embeddings(data.x, data.edge_index)
+
+        sort_pooling_embedding = global_sort_pool(gnn_embedding, data.batch, k=self.k)
         
         # Descriptor encoding (if available)
         if self.use_descriptors and hasattr(data, 'graph_descriptor'):
             descriptor_embedding = self.descriptor_mlp(data.graph_descriptor)
             # Concatenate GNN and descriptor embeddings
-            combined = torch.cat([gnn_embedding, descriptor_embedding], dim=1)
+            combined = torch.cat([sort_pooling_embedding, descriptor_embedding], dim=1)
         else:
-            combined = gnn_embedding
+            combined = sort_pooling_embedding
         
         # Fusion and classification
         fused = self.fusion(combined)

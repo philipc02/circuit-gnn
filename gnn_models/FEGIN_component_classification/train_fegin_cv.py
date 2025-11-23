@@ -302,7 +302,7 @@ def train_fold(fold_idx, config, representation='star',
                 'val_f1': val_f1_weighted,
                 'val_acc': val_acc,
                 'config': config
-            }, f'best_model_fold{fold_idx}_{representation}.pth')
+            }, f'fegin_experiments/best_model_fold{fold_idx}_{representation}.pth')
         else:
             patience_counter += 1
         
@@ -327,7 +327,6 @@ def train_fold(fold_idx, config, representation='star',
     per_class = compute_per_class_metrics(test_labels, test_preds)
     print(f"Per class metrics:")
     for comp_type, metrics in per_class.items():
-        # TODO
         print(f"{comp_type}: Acc={metrics['accuracy']:.3f}, "f"F1 = {metrics['f1']:.3f}, Support = {metrics['support']}")
     
     results.update({
@@ -343,14 +342,148 @@ def train_fold(fold_idx, config, representation='star',
     })
     
     return results
+ 
+# more convenient for now: use kfold data and combine together, then create regular 80:20 split
+def train_simple_split(config, representation='star',
+               base_data_folder_star="../../data/data_kfold_filtered",
+               base_data_folder_comp="../../data/data_kfold_filtered_component_level"):
+    # 80:20 split matching baseline paper methodology
+    # train FEGIN
+    device = get_device()
+    
+    # select data folder based on representation
+    if representation == 'star':
+        base_folder = base_data_folder_star
+    elif representation == 'component':
+        base_folder = base_data_folder_comp
+    else:
+        raise ValueError(f"Unknown representation: {representation}")
+    
+    print(f"Training with 80:20 split | Representation: {representation}")
+
+    # combine all folds to create one large dataset
+    all_graphs = []
+    for fold_idx in range(5):
+        fold_dir = f"{base_folder}/fold_{fold_idx}"
+        
+        # load all splits from each fold
+        for split in ['train', 'val', 'test']:
+            dataset = FEGINDatasetFiltered(
+                fold_dir, split, 
+                representation=representation,
+                mask_strategy='keep_pins'
+            )
+            # Add to all_graophs[] 
+            for i in range(len(dataset)):
+                data = dataset[i]
+                if data is not None:
+                    all_graphs.append(data)
+
+    # We expect 194
+    print(f"Total graphs collected: {len(all_graphs)}")
+
+    # shuffle and split
+    np.random.shuffle(all_graphs)
+    split_idx = int(0.8 * len(all_graphs))  # 80%
+    train_data = all_graphs[:split_idx]
+    test_data = all_graphs[split_idx:]  #20%
+    
+    print(f"Train: {len(train_data)}, Test: {len(test_data)}")
+
+    # class weights
+    class_weights = compute_class_weights(train_data, device)
+    print(f"Class weights: {class_weights}")
+
+    train_loader = DataLoader(
+        train_data, 
+        batch_size=config['batch_size'],
+        shuffle=True,
+        collate_fn=collate_fegin
+    )
+    test_loader = DataLoader(
+        test_data,
+        batch_size=config['batch_size'],
+        collate_fn=collate_fegin
+    )
+
+    # Create model with sort pooling
+    if config.get('use_descriptors', True):
+        model = FEGIN(
+            hidden_channels=config['hidden_channels'],
+            num_classes=len(COMPONENT_TYPES),
+            num_layers=config['num_layers'],
+            gnn_type=config['gnn_type'],
+            dropout=config['dropout'],
+            n_eigenvalues=config.get('n_eigenvalues', 10),
+            dgsd_bins=config.get('dgsd_bins', 10),
+            use_dgsd=config.get('use_dgsd', True),
+            use_descriptors=True,
+            k=config.get('sort_pool_k', 30)  # sort pooling parameter
+        ).to(device)
+    else:
+        model = BaselineGNN(
+            hidden_channels=config['hidden_channels'],
+            num_classes=len(COMPONENT_TYPES),
+            num_layers=config['num_layers'],
+            gnn_type=config['gnn_type'],
+            dropout=config['dropout']
+        ).to(device)
+
+    print(f"Model: {config['gnn_type'].upper()} with {sum(p.numel() for p in model.parameters()):,} parameters")
+
+    # Setup training
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=config['lr'],
+        weight_decay=config['weight_decay']
+    )
+
+    # Training -> no validation and early stopping
+    for epoch in range(config['num_epochs']):
+        train_loss, train_acc = train_epoch(model, train_loader, optimizer, criterion, device)
+        
+        if epoch % 10 == 0:
+            print(f"Epoch {epoch:3d} | Train Loss: {train_loss:.4f} Acc: {train_acc:.4f}")
+    
+    # Final evaluation on test set
+    test_loss, test_acc, test_f1_weighted, test_f1_macro, test_preds, test_labels = evaluate(
+        model, test_loader, criterion, device, return_details=True
+    )
+    
+    print(f"Final Test Results ({representation})")
+    print(f"Accuracy: {test_acc:.4f}")
+    print(f"F1 (weighted): {test_f1_weighted:.4f}")
+    print(f"F1 (macro): {test_f1_macro:.4f}")
+    
+    # Per class metrics
+    per_class = compute_per_class_metrics(test_labels, test_preds)
+    print(f"Per class metrics:")
+    for comp_type, metrics in per_class.items():
+        print(f"{comp_type}: Acc={metrics['accuracy']:.3f}, F1={metrics['f1']:.3f}, Support={metrics['support']}")
+    
+    results = {
+        'representation': representation,
+        'test_acc': test_acc,
+        'test_f1_weighted': test_f1_weighted,
+        'test_f1_macro': test_f1_macro,
+        'per_class': per_class,
+        'confusion_matrix': confusion_matrix(test_labels, test_preds).tolist()
+    }
+    
+    return results
 
 
 def run_cross_validation(config, representation='star'):
     all_results = []
     
+    '''
     for fold_idx in range(5):
         results = train_fold(fold_idx, config, representation)
         all_results.append(results)
+    '''
+    results = train_simple_split(config, representation)
+    all_results.append(results)
     
     test_accs = [r['test_acc'] for r in all_results]
     test_f1s = [r['test_f1_weighted'] for r in all_results]
@@ -358,11 +491,12 @@ def run_cross_validation(config, representation='star'):
     print(f"Cross-Validation Results ({representation})")
     print(f"Test Accuracy: {np.mean(test_accs):.4f} ± {np.std(test_accs):.4f}")
     print(f"Test F1: {np.mean(test_f1s):.4f} ± {np.std(test_f1s):.4f}")
-    print(f"Per fold: {[f'{acc:.4f}' for acc in test_accs]}")
+    # print(f"Per fold: {[f'{acc:.4f}' for acc in test_accs]}")
     
     # Save results
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_dir = Path(f"fegin_experiments/fegin_results_{representation}_{timestamp}")
+    # results_dir = Path(f"fegin_experiments/fegin_results_{representation}_{timestamp}")
+    results_dir = Path(f"fegin_experiments/fegin_results_simple_split_{representation}_{timestamp}")
     results_dir.mkdir(parents=True, exist_ok=True)
     
     with open(results_dir / "cv_results.json", 'w') as f:
@@ -390,7 +524,8 @@ if __name__ == "__main__":
         'weight_decay': 1e-5,
         'num_epochs': 100,
         'patience': 100,
-        'use_descriptors': True
+        'use_descriptors': True,
+        'sort_pool_k': 30
     }
     
 
