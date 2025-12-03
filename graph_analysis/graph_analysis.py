@@ -141,7 +141,7 @@ def process_folder(graph_folder):
         })
     freq_df = pd.DataFrame(freq_rows).sort_values("count", ascending=False)
 
-    with open("graph_statistics_summary.csv", "w", encoding="utf-8") as f:
+    with open("graph_statistics_filtered_summary.csv", "w", encoding="utf-8") as f:
         summary_full.to_csv(f, sep=";", decimal=",")
         f.write("\n\n# Global component class frequencies\n")
         freq_df.to_csv(f, sep=";", index=False, decimal=",")
@@ -149,5 +149,5 @@ def process_folder(graph_folder):
 
 if __name__ == "__main__":
     #graph_folder = r"C:\Users\chris\OneDrive\Desktop\Chrissa\University\Sem 7\Bachelor's Thesis\Literature & resource review\Circuit-Completion-Using-GNNs\component classification\data\processed_graphs"
-    graph_folder = "graph_data"
+    graph_folder = "graphs_star_filtered"
     process_folder(graph_folder)
